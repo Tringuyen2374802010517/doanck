@@ -3,7 +3,7 @@ import os
 import shutil
 
 # ===== PATH =====
-csv_path = "all_labels.csv"  # sửa đúng tên file
+csv_path = "data/ePillID_data/all_labels.csv"
 img_dir = "data/ePillID_data/classification_data/segmented_nih_pills_224"
 out_dir = "data/processed"
 
