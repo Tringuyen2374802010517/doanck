@@ -3,9 +3,11 @@ import os
 import shutil
 
 # ===== PATH =====
-csv_path = "data/ePillID_data/all_labels.csv"
-img_dir = "data/ePillID_data/classification_data/segmented_nih_pills_224"
-out_dir = "data/processed"
+BASE_DIR = "/content/doanck/PTDLvHS/data/ePillID_data"
+
+csv_path = os.path.join(BASE_DIR, "all_labels.csv")
+img_dir = os.path.join(BASE_DIR, "classification_data/segmented_nih_pills_224")
+out_dir = "/content/doanck/PTDLvHS/data/processed"
 
 os.makedirs(out_dir, exist_ok=True)
 
