@@ -10,6 +10,19 @@ from model import EmbeddingModel
 from dataset import TripletDataset
 
 # ========================
+# PATH (QUAN TRỌNG)
+# ========================
+BASE_DIR = "/content/doanck/PTDLvHS/data"
+
+train_path = os.path.join(BASE_DIR, "train")
+val_path   = os.path.join(BASE_DIR, "val")
+
+print("Train path:", train_path)
+print("Val path:", val_path)
+print("Train exists:", os.path.exists(train_path))
+print("Val exists:", os.path.exists(val_path))
+
+# ========================
 # DEVICE
 # ========================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,8 +41,8 @@ transform = transforms.Compose([
 # ========================
 # DATASET
 # ========================
-train_dataset = TripletDataset("data/train", transform=transform)
-val_dataset   = TripletDataset("data/val", transform=transform)
+train_dataset = TripletDataset(train_path, transform=transform)
+val_dataset   = TripletDataset(val_path, transform=transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 val_loader   = DataLoader(val_dataset, batch_size=32)
@@ -134,7 +147,7 @@ for epoch in range(epochs):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), "best_model.pth")
-        print("Saved best model!")
+        print("✅ Saved best model!")
 
 # ========================
 # PLOT LOSS
