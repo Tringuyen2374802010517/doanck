@@ -26,7 +26,7 @@ transform = transforms.Compose([
 ])
 
 # ========================
-# DATASET (CHIA TRAIN / VAL)
+# DATASET
 # ========================
 train_dataset = TripletDataset("data/train", transform=transform)
 val_dataset   = TripletDataset("data/val", transform=transform)
@@ -39,13 +39,19 @@ val_loader   = DataLoader(val_dataset, batch_size=32)
 # ========================
 model = EmbeddingModel().to(device)
 
-
-
 # ========================
 # LOSS + OPTIMIZER
 # ========================
 criterion = nn.TripletMarginLoss(margin=1.0)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+# ========================
+# ACCURACY FUNCTION
+# ========================
+def triplet_accuracy(a, p, n):
+    dist_ap = torch.norm(a - p, dim=1)
+    dist_an = torch.norm(a - n, dim=1)
+    return (dist_ap < dist_an).float().mean().item()
 
 # ========================
 # TRAIN CONFIG
@@ -55,6 +61,8 @@ best_val_loss = float("inf")
 
 train_losses = []
 val_losses = []
+train_accs = []
+val_accs = []
 
 # ========================
 # TRAIN LOOP
@@ -62,10 +70,11 @@ val_losses = []
 for epoch in range(epochs):
     model.train()
     total_loss = 0
+    total_acc = 0
 
     print(f"\nEpoch {epoch+1}/{epochs}")
 
-    for i, (a, p, n) in enumerate(tqdm(train_loader)):
+    for a, p, n in tqdm(train_loader):
         a, p, n = a.to(device), p.to(device), n.to(device)
 
         emb_a = model(a)
@@ -80,14 +89,21 @@ for epoch in range(epochs):
 
         total_loss += loss.item()
 
+        acc = triplet_accuracy(emb_a, emb_p, emb_n)
+        total_acc += acc
+
     train_loss = total_loss / len(train_loader)
+    train_acc  = total_acc / len(train_loader)
+
     train_losses.append(train_loss)
+    train_accs.append(train_acc)
 
     # ========================
     # VALIDATION
     # ========================
     model.eval()
     val_loss = 0
+    val_acc_total = 0
 
     with torch.no_grad():
         for a, p, n in val_loader:
@@ -100,10 +116,17 @@ for epoch in range(epochs):
             loss = criterion(emb_a, emb_p, emb_n)
             val_loss += loss.item()
 
+            acc = triplet_accuracy(emb_a, emb_p, emb_n)
+            val_acc_total += acc
+
     val_loss /= len(val_loader)
+    val_acc  = val_acc_total / len(val_loader)
+
     val_losses.append(val_loss)
+    val_accs.append(val_acc)
 
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+    print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
     # ========================
     # SAVE BEST MODEL
@@ -114,7 +137,7 @@ for epoch in range(epochs):
         print("Saved best model!")
 
 # ========================
-# PLOT GRAPH
+# PLOT LOSS
 # ========================
 plt.figure(figsize=(8,5))
 plt.plot(train_losses, label="Train Loss")
@@ -125,4 +148,18 @@ plt.title("Training vs Validation Loss")
 plt.legend()
 plt.grid()
 plt.savefig("loss.png")
+plt.show()
+
+# ========================
+# PLOT ACCURACY
+# ========================
+plt.figure(figsize=(8,5))
+plt.plot(train_accs, label="Train Accuracy")
+plt.plot(val_accs, label="Validation Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.title("Accuracy Curve")
+plt.legend()
+plt.grid()
+plt.savefig("accuracy.png")
 plt.show()
