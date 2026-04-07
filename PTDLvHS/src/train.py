@@ -39,8 +39,7 @@ val_loader   = DataLoader(val_dataset, batch_size=32)
 # ========================
 model = EmbeddingModel().to(device)
 
-# 🔥 bật pretrained nếu chưa có
-# (nhớ sửa trong model.py: pretrained=True)
+
 
 # ========================
 # LOSS + OPTIMIZER
@@ -112,7 +111,7 @@ for epoch in range(epochs):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), "best_model.pth")
-        print("✅ Saved best model!")
+        print("Saved best model!")
 
 # ========================
 # PLOT GRAPH
