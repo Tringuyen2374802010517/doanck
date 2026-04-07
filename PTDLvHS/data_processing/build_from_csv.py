@@ -7,20 +7,18 @@ BASE_DIR = "/content/doanck/PTDLvHS/data/ePillID_data"
 
 csv_path = os.path.join(BASE_DIR, "all_labels.csv")
 
-# 👉 GIỮ dòng này (theo ý bạn)
-img_dir = os.path.join(BASE_DIR, "classification_data/segmented_nih_pills_224")
+# 👉 segmented (ảnh nằm trực tiếp)
+segmented_dir = os.path.join(BASE_DIR, "classification_data/segmented_nih_pills_224")
 
-# 👉 dùng thật (fcn)
-img_dir_fcn = os.path.join(BASE_DIR, "classification_data/fcn_mix_weight")
+# 👉 fcn (ảnh nằm trong folder con)
+fcn_dir = os.path.join(BASE_DIR, "classification_data/fcn_mix_weight")
 
-# 👉 folder chứa ảnh thật
-img_dirs = [
-    os.path.join(img_dir_fcn, "dc_224"),
-    os.path.join(img_dir_fcn, "dr_224"),
+fcn_dirs = [
+    os.path.join(fcn_dir, "dc_224"),
+    os.path.join(fcn_dir, "dr_224"),
 ]
 
 out_dir = "/content/doanck/PTDLvHS/data/processed"
-
 os.makedirs(out_dir, exist_ok=True)
 
 # ===== LOAD CSV =====
@@ -38,12 +36,17 @@ for _, row in df.iterrows():
 
     src_path = None
 
-    # 👉 tìm trong dc_224 + dr_224
-    for d in img_dirs:
-        temp_path = os.path.join(d, img_name)
-        if os.path.exists(temp_path):
-            src_path = temp_path
-            break
+    # ===== 1. check segmented trước =====
+    path1 = os.path.join(segmented_dir, img_name)
+    if os.path.exists(path1):
+        src_path = path1
+    else:
+        # ===== 2. check fcn =====
+        for d in fcn_dirs:
+            temp_path = os.path.join(d, img_name)
+            if os.path.exists(temp_path):
+                src_path = temp_path
+                break
 
     if src_path is None:
         missing += 1
@@ -55,5 +58,5 @@ for _, row in df.iterrows():
     shutil.copy(src_path, os.path.join(cls_dir, img_name))
     count += 1
 
-print("✅ Copied:", count, "images")
-print("❌ Missing:", missing, "images")
+print("✅ Copied:", count)
+print("❌ Missing:", missing)
