@@ -5,9 +5,18 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
+import random
+import numpy as np
 
 from model import EmbeddingModel
 from dataset import TripletDataset
+
+# ========================
+# FIX RANDOM (ổn định biểu đồ)
+# ========================
+torch.manual_seed(42)
+random.seed(42)
+np.random.seed(42)
 
 # ========================
 # PATH
@@ -27,20 +36,22 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 # ========================
-# TRANSFORM (TÁCH RIÊNG)
+# TRANSFORM (CHUẨN + NORMALIZE)
 # ========================
 train_transform = transforms.Compose([
     transforms.Resize((224,224)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(20),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-    transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
-    transforms.ToTensor()
+    transforms.ColorJitter(0.2,0.2,0.2),
+    transforms.RandomAffine(degrees=0, translate=(0.05,0.05)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
 ])
 
 val_transform = transforms.Compose([
     transforms.Resize((224,224)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
 ])
 
 # ========================
@@ -49,8 +60,8 @@ val_transform = transforms.Compose([
 train_dataset = TripletDataset(train_path, transform=train_transform)
 val_dataset   = TripletDataset(val_path, transform=val_transform)
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader   = DataLoader(val_dataset, batch_size=32)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+val_loader   = DataLoader(val_dataset, batch_size=64)
 
 # ========================
 # MODEL
@@ -60,8 +71,22 @@ model = EmbeddingModel().to(device)
 # ========================
 # LOSS + OPTIMIZER
 # ========================
-criterion = nn.TripletMarginLoss(margin=1.0)
-optimizer = torch.optim.Adam(model.parameters(), lr=5e-5, weight_decay=1e-4)
+criterion = nn.TripletMarginLoss(margin=0.5)
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=7e-5,
+    weight_decay=1e-4
+)
+
+# 👉 Scheduler (giúp biểu đồ đẹp)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    factor=0.5,
+    patience=2,
+    verbose=True
+)
 
 # ========================
 # ACCURACY FUNCTION
@@ -80,7 +105,7 @@ counter = 0
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 15
+epochs = 20
 best_val_loss = float("inf")
 
 train_losses = []
@@ -151,6 +176,9 @@ for epoch in range(epochs):
 
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
+
+    # 👉 Scheduler update
+    scheduler.step(val_loss)
 
     # ========================
     # SAVE + EARLY STOPPING
