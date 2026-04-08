@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import os
 
@@ -20,26 +19,29 @@ print("Train exists:", os.path.exists(train_path))
 print("Val exists:", os.path.exists(val_path))
 
 # ========================
-# DEVICE (A100)
+# DEVICE (tự check GPU)
 # ========================
-device = torch.device("cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
-print("GPU:", torch.cuda.get_device_name(0))
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+else:
+    print("⚠️ CUDA not available. Running on CPU.")
 
 # ========================
-# TRANSFORM (STRONG AUG)
+# TRANSFORM (vừa đủ để train đẹp + ổn)
 # ========================
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+    transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(30),
-    transforms.ColorJitter(0.3, 0.3, 0.3),
-    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(0.15, 0.15, 0.15),
     transforms.ToTensor()
 ])
 
 val_transform = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor()
 ])
 
@@ -49,9 +51,24 @@ val_transform = transforms.Compose([
 train_dataset = TripletDataset(train_path, transform=train_transform)
 val_dataset   = TripletDataset(val_path, transform=val_transform)
 
-# A100 → batch lớn
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
-val_loader   = DataLoader(val_dataset, batch_size=64, num_workers=4, pin_memory=True)
+# batch size tự động theo thiết bị
+batch_size = 96 if torch.cuda.is_available() else 16
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=batch_size,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=torch.cuda.is_available()
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=torch.cuda.is_available()
+)
 
 # ========================
 # MODEL
@@ -59,126 +76,143 @@ val_loader   = DataLoader(val_dataset, batch_size=64, num_workers=4, pin_memory=
 model = EmbeddingModel().to(device)
 
 # ========================
-# LOSS + OPTIMIZER
+# LOSS
 # ========================
 criterion = nn.TripletMarginLoss(margin=1.2)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=1e-4)
-
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer,
-    mode='min',
-    factor=0.5,
-    patience=2,
+# ========================
+# OPTIMIZER
+# ========================
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=2e-5,
+    weight_decay=1e-4,
+    betas=(0.9, 0.99)
 )
-
-# ========================
-# MIXED PRECISION (A100 cực mạnh)
-# ========================
-scaler = torch.cuda.amp.GradScaler()
-
-# ========================
-# ACCURACY FUNCTION
-# ========================
-def triplet_accuracy(a, p, n):
-    dist_ap = torch.norm(a - p, dim=1)
-    dist_an = torch.norm(a - n, dim=1)
-    return (dist_ap < dist_an).float().mean().item()
-
-# ========================
-# EARLY STOPPING
-# ========================
-patience = 5
-counter = 0
 
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 20
+epochs = 30
+patience = 8
+counter = 0
 best_val_loss = float("inf")
 
-train_losses = []
-val_losses = []
-train_accs = []
-val_accs = []
+# ========================
+# SCHEDULER
+# ========================
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer,
+    T_max=epochs
+)
+
+# ========================
+# AMP (chỉ bật khi có GPU)
+# ========================
+scaler = torch.amp.GradScaler("cuda") if torch.cuda.is_available() else None
+
+# ========================
+# ACCURACY FUNCTION
+# ========================
+def triplet_accuracy(anchor, positive, negative):
+    dist_ap = torch.norm(anchor - positive, dim=1)
+    dist_an = torch.norm(anchor - negative, dim=1)
+    return (dist_ap < dist_an).float().mean().item()
 
 # ========================
 # TRAIN LOOP
 # ========================
 for epoch in range(epochs):
     model.train()
-    total_loss = 0
-    total_acc = 0
 
-    print(f"\nEpoch {epoch+1}/{epochs}")
+    total_train_loss = 0
+    total_train_acc = 0
+
+    print(f"\nEpoch {epoch + 1}/{epochs}")
 
     for a, p, n in tqdm(train_loader):
-        a, p, n = a.to(device), p.to(device), n.to(device)
+        a = a.to(device)
+        p = p.to(device)
+        n = n.to(device)
 
         optimizer.zero_grad()
 
-        # AMP
-        with torch.cuda.amp.autocast():
+        # ===== GPU (AMP) =====
+        if scaler is not None:
+            with torch.amp.autocast("cuda"):
+                emb_a = model(a)
+                emb_p = model(p)
+                emb_n = model(n)
+
+                loss = criterion(emb_a, emb_p, emb_n)
+
+            scaler.scale(loss).backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+        # ===== CPU =====
+        else:
             emb_a = model(a)
             emb_p = model(p)
             emb_n = model(n)
 
             loss = criterion(emb_a, emb_p, emb_n)
 
-        scaler.scale(loss).backward()
+            loss.backward()
 
-        # chống rung gradient
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
-        scaler.step(optimizer)
-        scaler.update()
+            optimizer.step()
 
-        total_loss += loss.item()
+        total_train_loss += loss.item()
+        total_train_acc += triplet_accuracy(emb_a, emb_p, emb_n)
 
-        acc = triplet_accuracy(emb_a, emb_p, emb_n)
-        total_acc += acc
-
-    train_loss = total_loss / len(train_loader)
-    train_acc  = total_acc / len(train_loader)
-
-    train_losses.append(train_loss)
-    train_accs.append(train_acc)
+    train_loss = total_train_loss / len(train_loader)
+    train_acc  = total_train_acc / len(train_loader)
 
     # ========================
     # VALIDATION
     # ========================
     model.eval()
-    val_loss = 0
-    val_acc_total = 0
+
+    total_val_loss = 0
+    total_val_acc = 0
 
     with torch.no_grad():
         for a, p, n in val_loader:
-            a, p, n = a.to(device), p.to(device), n.to(device)
+            a = a.to(device)
+            p = p.to(device)
+            n = n.to(device)
 
             emb_a = model(a)
             emb_p = model(p)
             emb_n = model(n)
 
             loss = criterion(emb_a, emb_p, emb_n)
-            val_loss += loss.item()
 
-            acc = triplet_accuracy(emb_a, emb_p, emb_n)
-            val_acc_total += acc
+            total_val_loss += loss.item()
+            total_val_acc += triplet_accuracy(emb_a, emb_p, emb_n)
 
-    val_loss /= len(val_loader)
-    val_acc  = val_acc_total / len(val_loader)
-
-    val_losses.append(val_loss)
-    val_accs.append(val_acc)
-
-    print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-    print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
-
-    # scheduler (cực quan trọng)
-    scheduler.step(val_loss)
+    val_loss = total_val_loss / len(val_loader)
+    val_acc  = total_val_acc / len(val_loader)
 
     # ========================
-    # SAVE + EARLY STOPPING
+    # UPDATE LR
+    # ========================
+    scheduler.step()
+
+    # ========================
+    # LOG
+    # ========================
+    print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+    print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
+    print(f"LR        : {optimizer.param_groups[0]['lr']:.8f}")
+
+    # ========================
+    # SAVE BEST MODEL
     # ========================
     if val_loss < best_val_loss:
         best_val_loss = val_loss
@@ -188,46 +222,10 @@ for epoch in range(epochs):
     else:
         counter += 1
         print(f"No improvement: {counter}/{patience}")
+
         if counter >= patience:
             print("⏹ Early stopping")
             break
 
-# ========================
-# SMOOTH FUNCTION
-# ========================
-def smooth_curve(values, weight=0.9):
-    smoothed = []
-    last = values[0]
-    for v in values:
-        s = last * weight + (1 - weight) * v
-        smoothed.append(s)
-        last = s
-    return smoothed
-
-# ========================
-# PLOT LOSS
-# ========================
-plt.figure(figsize=(8,5))
-plt.plot(smooth_curve(train_losses), label="Train Loss")
-plt.plot(smooth_curve(val_losses), label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training vs Validation Loss")
-plt.legend()
-plt.grid()
-plt.savefig("loss.png")
-plt.show()
-
-# ========================
-# PLOT ACCURACY
-# ========================
-plt.figure(figsize=(8,5))
-plt.plot(smooth_curve(train_accs), label="Train Accuracy")
-plt.plot(smooth_curve(val_accs), label="Validation Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.title("Accuracy Curve")
-plt.legend()
-plt.grid()
-plt.savefig("accuracy.png")
-plt.show()
+print("\n🎉 Training completed!")
+print("Best model saved as: best_model.pth")
