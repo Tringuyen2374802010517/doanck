@@ -10,15 +10,13 @@ from model import EmbeddingModel
 from dataset import TripletDataset
 
 # ========================
-# PATH (QUAN TRỌNG)
+# PATH
 # ========================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
 
 train_path = os.path.join(BASE_DIR, "train")
 val_path   = os.path.join(BASE_DIR, "val")
 
-print("Train path:", train_path)
-print("Val path:", val_path)
 print("Train exists:", os.path.exists(train_path))
 print("Val exists:", os.path.exists(val_path))
 
@@ -29,20 +27,27 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 # ========================
-# TRANSFORM
+# TRANSFORM (TÁCH RIÊNG)
 # ========================
-transform = transforms.Compose([
+train_transform = transforms.Compose([
     transforms.Resize((224,224)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(20),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+    transforms.ToTensor()
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize((224,224)),
     transforms.ToTensor()
 ])
 
 # ========================
 # DATASET
 # ========================
-train_dataset = TripletDataset(train_path, transform=transform)
-val_dataset   = TripletDataset(val_path, transform=transform)
+train_dataset = TripletDataset(train_path, transform=train_transform)
+val_dataset   = TripletDataset(val_path, transform=val_transform)
 
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 val_loader   = DataLoader(val_dataset, batch_size=32)
@@ -56,7 +61,7 @@ model = EmbeddingModel().to(device)
 # LOSS + OPTIMIZER
 # ========================
 criterion = nn.TripletMarginLoss(margin=1.0)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=5e-5, weight_decay=1e-4)
 
 # ========================
 # ACCURACY FUNCTION
@@ -67,9 +72,15 @@ def triplet_accuracy(a, p, n):
     return (dist_ap < dist_an).float().mean().item()
 
 # ========================
+# EARLY STOPPING
+# ========================
+patience = 5
+counter = 0
+
+# ========================
 # TRAIN CONFIG
 # ========================
-epochs = 40
+epochs = 15
 best_val_loss = float("inf")
 
 train_losses = []
@@ -142,19 +153,38 @@ for epoch in range(epochs):
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
     # ========================
-    # SAVE BEST MODEL
+    # SAVE + EARLY STOPPING
     # ========================
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), "best_model.pth")
         print("✅ Saved best model!")
+        counter = 0
+    else:
+        counter += 1
+        print(f"No improvement: {counter}/{patience}")
+        if counter >= patience:
+            print("⏹ Early stopping")
+            break
+
+# ========================
+# SMOOTH FUNCTION
+# ========================
+def smooth_curve(values, weight=0.8):
+    smoothed = []
+    last = values[0]
+    for v in values:
+        s = last * weight + (1 - weight) * v
+        smoothed.append(s)
+        last = s
+    return smoothed
 
 # ========================
 # PLOT LOSS
 # ========================
 plt.figure(figsize=(8,5))
-plt.plot(train_losses, label="Train Loss")
-plt.plot(val_losses, label="Validation Loss")
+plt.plot(smooth_curve(train_losses), label="Train Loss")
+plt.plot(smooth_curve(val_losses), label="Validation Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Training vs Validation Loss")
@@ -167,8 +197,8 @@ plt.show()
 # PLOT ACCURACY
 # ========================
 plt.figure(figsize=(8,5))
-plt.plot(train_accs, label="Train Accuracy")
-plt.plot(val_accs, label="Validation Accuracy")
+plt.plot(smooth_curve(train_accs), label="Train Accuracy")
+plt.plot(smooth_curve(val_accs), label="Validation Accuracy")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Accuracy Curve")
