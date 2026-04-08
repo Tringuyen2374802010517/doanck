@@ -9,30 +9,57 @@ from src.predict import predict_image
 
 app = Flask(__name__)
 
+# ========================
+# LOAD MODEL
+# ========================
 model = EmbeddingModel()
 model.load_state_dict(torch.load("best_model.pth", map_location="cpu"))
 model.eval()
 
+# ========================
+# LOAD DATABASE
+# ========================
 embeddings = np.load("embeddings.npy")
 labels = np.load("labels.npy")
-class_names = np.load("class_names.npy")
+class_names = np.load("class_names.npy", allow_pickle=True)
+full_labels = np.load("full_labels.npy", allow_pickle=True)
 
+# ========================
+# IMAGE TRANSFORM
+# ========================
 transform = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor()
 ])
 
-@app.route("/", methods=["GET","POST"])
+# ========================
+# HOME PAGE
+# ========================
+@app.route("/", methods=["GET", "POST"])
 def index():
-    result = None
+    results = None
 
     if request.method == "POST":
         file = request.files["file"]
-        img = Image.open(file).convert("RGB")
-        img = transform(img).unsqueeze(0)
 
-        result = predict_image(model, img, embeddings, labels, class_names)
+        if file:
+            img = Image.open(file).convert("RGB")
+            img = transform(img).unsqueeze(0)
 
-    return render_template("index.html", result=result)
+            results = predict_image(
+                model,
+                img,
+                embeddings,
+                labels,
+                class_names,
+                full_labels,
+                top_k=3
+            )
 
-app.run(debug=True)
+    return render_template("index.html", results=results)
+
+# ========================
+# RUN APP
+# ========================
+if __name__ == "__main__":
+    app.run(debug=True)

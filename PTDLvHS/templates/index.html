@@ -11,12 +11,20 @@
 
     <form method="POST" enctype="multipart/form-data">
         <input type="file" name="file" required>
-        <button>Predict</button>
+        <button type="submit">Predict</button>
     </form>
 
-    {% if result %}
+    {% if results %}
         <div class="result">
-            {{ result }}
+            <h2>Top 3 thuốc giống nhất</h2>
+
+            {% for item in results %}
+                <div class="pill-card">
+                    <h3>Mã thuốc: {{ item.pill_code }}</h3>
+                    <p><strong>Nhãn đầy đủ:</strong> {{ item.full_label }}</p>
+                    <p><strong>Độ tương đồng:</strong> {{ item.score }}%</p>
+                </div>
+            {% endfor %}
         </div>
     {% endif %}
 </div>
