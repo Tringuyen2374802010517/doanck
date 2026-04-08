@@ -12,17 +12,20 @@ from model import EmbeddingModel
 from dataset import TripletDataset
 
 # ========================
-# FIX RANDOM (ổn định biểu đồ)
+# FIX SEED (ổn định)
 # ========================
-torch.manual_seed(42)
-random.seed(42)
-np.random.seed(42)
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
 
 # ========================
 # PATH
 # ========================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
-
 train_path = os.path.join(BASE_DIR, "train")
 val_path   = os.path.join(BASE_DIR, "val")
 
@@ -36,22 +39,19 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 # ========================
-# TRANSFORM (CHUẨN + NORMALIZE)
+# TRANSFORM (ỔN ĐỊNH)
 # ========================
 train_transform = transforms.Compose([
     transforms.Resize((224,224)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(20),
-    transforms.ColorJitter(0.2,0.2,0.2),
-    transforms.RandomAffine(degrees=0, translate=(0.05,0.05)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
 ])
 
 val_transform = transforms.Compose([
     transforms.Resize((224,224)),
     transforms.ToTensor(),
-    transforms.Normalize([0.5,0.5,0.5],[0.5,0.5,0.5])
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
 ])
 
 # ========================
@@ -60,8 +60,8 @@ val_transform = transforms.Compose([
 train_dataset = TripletDataset(train_path, transform=train_transform)
 val_dataset   = TripletDataset(val_path, transform=val_transform)
 
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-val_loader   = DataLoader(val_dataset, batch_size=64)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2, pin_memory=True)
+val_loader   = DataLoader(val_dataset, batch_size=64, num_workers=2, pin_memory=True)
 
 # ========================
 # MODEL
@@ -71,25 +71,31 @@ model = EmbeddingModel().to(device)
 # ========================
 # LOSS + OPTIMIZER
 # ========================
-criterion = nn.TripletMarginLoss(margin=0.5)
+criterion = nn.TripletMarginLoss(margin=1.0)
 
-optimizer = torch.optim.Adam(
+optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=7e-5,
+    lr=1e-4,
     weight_decay=1e-4
 )
 
-# 👉 Scheduler (giúp biểu đồ đẹp)
+# ========================
+# SCHEDULER
+# ========================
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode='min',
-    factor=0.5,
-    patience=2,
-    verbose=True
+    factor=0.3,
+    patience=2
 )
 
 # ========================
-# ACCURACY FUNCTION
+# MIXED PRECISION (🔥 H100)
+# ========================
+scaler = torch.cuda.amp.GradScaler()
+
+# ========================
+# ACCURACY
 # ========================
 def triplet_accuracy(a, p, n):
     dist_ap = torch.norm(a - p, dim=1)
@@ -105,41 +111,39 @@ counter = 0
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 20
+epochs = 30
 best_val_loss = float("inf")
 
-train_losses = []
-val_losses = []
-train_accs = []
-val_accs = []
+train_losses, val_losses = [], []
+train_accs, val_accs = [], []
 
 # ========================
 # TRAIN LOOP
 # ========================
 for epoch in range(epochs):
     model.train()
-    total_loss = 0
-    total_acc = 0
+    total_loss, total_acc = 0, 0
 
     print(f"\nEpoch {epoch+1}/{epochs}")
 
     for a, p, n in tqdm(train_loader):
         a, p, n = a.to(device), p.to(device), n.to(device)
 
-        emb_a = model(a)
-        emb_p = model(p)
-        emb_n = model(n)
-
-        loss = criterion(emb_a, emb_p, emb_n)
-
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+        with torch.cuda.amp.autocast():
+            emb_a = model(a)
+            emb_p = model(p)
+            emb_n = model(n)
+
+            loss = criterion(emb_a, emb_p, emb_n)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
-
-        acc = triplet_accuracy(emb_a, emb_p, emb_n)
-        total_acc += acc
+        total_acc += triplet_accuracy(emb_a, emb_p, emb_n)
 
     train_loss = total_loss / len(train_loader)
     train_acc  = total_acc / len(train_loader)
@@ -151,8 +155,7 @@ for epoch in range(epochs):
     # VALIDATION
     # ========================
     model.eval()
-    val_loss = 0
-    val_acc_total = 0
+    val_loss, val_acc_total = 0, 0
 
     with torch.no_grad():
         for a, p, n in val_loader:
@@ -163,10 +166,9 @@ for epoch in range(epochs):
             emb_n = model(n)
 
             loss = criterion(emb_a, emb_p, emb_n)
-            val_loss += loss.item()
 
-            acc = triplet_accuracy(emb_a, emb_p, emb_n)
-            val_acc_total += acc
+            val_loss += loss.item()
+            val_acc_total += triplet_accuracy(emb_a, emb_p, emb_n)
 
     val_loss /= len(val_loader)
     val_acc  = val_acc_total / len(val_loader)
@@ -176,13 +178,12 @@ for epoch in range(epochs):
 
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
+    print("LR:", optimizer.param_groups[0]['lr'])
 
-    # 👉 Scheduler update
+    # scheduler
     scheduler.step(val_loss)
 
-    # ========================
-    # SAVE + EARLY STOPPING
-    # ========================
+    # save best
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), "best_model.pth")
@@ -196,7 +197,7 @@ for epoch in range(epochs):
             break
 
 # ========================
-# SMOOTH FUNCTION
+# SMOOTH
 # ========================
 def smooth_curve(values, weight=0.8):
     smoothed = []
@@ -208,29 +209,16 @@ def smooth_curve(values, weight=0.8):
     return smoothed
 
 # ========================
-# PLOT LOSS
+# PLOT
 # ========================
 plt.figure(figsize=(8,5))
 plt.plot(smooth_curve(train_losses), label="Train Loss")
-plt.plot(smooth_curve(val_losses), label="Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training vs Validation Loss")
-plt.legend()
-plt.grid()
-plt.savefig("loss.png")
-plt.show()
+plt.plot(smooth_curve(val_losses), label="Val Loss")
+plt.legend(); plt.grid()
+plt.savefig("loss.png"); plt.show()
 
-# ========================
-# PLOT ACCURACY
-# ========================
 plt.figure(figsize=(8,5))
-plt.plot(smooth_curve(train_accs), label="Train Accuracy")
-plt.plot(smooth_curve(val_accs), label="Validation Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.title("Accuracy Curve")
-plt.legend()
-plt.grid()
-plt.savefig("accuracy.png")
-plt.show()
+plt.plot(smooth_curve(train_accs), label="Train Acc")
+plt.plot(smooth_curve(val_accs), label="Val Acc")
+plt.legend(); plt.grid()
+plt.savefig("accuracy.png"); plt.show()
