@@ -12,7 +12,7 @@ from model import EmbeddingModel
 from dataset import TripletDataset
 
 # ========================
-# FIX SEED (ổn định)
+# SEED
 # ========================
 def set_seed(seed=42):
     random.seed(seed)
@@ -38,8 +38,11 @@ print("Val exists:", os.path.exists(val_path))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
+# 🔥 TỐI ƯU GPU
+torch.backends.cudnn.benchmark = True
+
 # ========================
-# TRANSFORM (ỔN ĐỊNH)
+# TRANSFORM
 # ========================
 train_transform = transforms.Compose([
     transforms.Resize((224,224)),
@@ -60,8 +63,24 @@ val_transform = transforms.Compose([
 train_dataset = TripletDataset(train_path, transform=train_transform)
 val_dataset   = TripletDataset(val_path, transform=val_transform)
 
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=2, pin_memory=True)
-val_loader   = DataLoader(val_dataset, batch_size=64, num_workers=2, pin_memory=True)
+# 🔥 A100 CONFIG
+BATCH_SIZE = 128   # thử 256 nếu đủ VRAM
+NUM_WORKERS = 4
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=NUM_WORKERS,
+    pin_memory=True
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=BATCH_SIZE,
+    num_workers=NUM_WORKERS,
+    pin_memory=True
+)
 
 # ========================
 # MODEL
@@ -71,7 +90,7 @@ model = EmbeddingModel().to(device)
 # ========================
 # LOSS + OPTIMIZER
 # ========================
-criterion = nn.TripletMarginLoss(margin=1.0)
+criterion = nn.TripletMarginLoss(margin=0.5)
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -90,7 +109,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 # ========================
-# MIXED PRECISION (🔥 H100)
+# AMP (A100 cực mạnh)
 # ========================
 scaler = torch.cuda.amp.GradScaler()
 
@@ -103,16 +122,12 @@ def triplet_accuracy(a, p, n):
     return (dist_ap < dist_an).float().mean().item()
 
 # ========================
-# EARLY STOPPING
-# ========================
-patience = 5
-counter = 0
-
-# ========================
 # TRAIN CONFIG
 # ========================
 epochs = 30
 best_val_loss = float("inf")
+patience = 5
+counter = 0
 
 train_losses, val_losses = [], []
 train_accs, val_accs = [], []
@@ -214,11 +229,21 @@ def smooth_curve(values, weight=0.8):
 plt.figure(figsize=(8,5))
 plt.plot(smooth_curve(train_losses), label="Train Loss")
 plt.plot(smooth_curve(val_losses), label="Val Loss")
-plt.legend(); plt.grid()
-plt.savefig("loss.png"); plt.show()
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Training vs Validation Loss")
+plt.legend()
+plt.grid()
+plt.savefig("loss.png")
+plt.show()
 
 plt.figure(figsize=(8,5))
-plt.plot(smooth_curve(train_accs), label="Train Acc")
-plt.plot(smooth_curve(val_accs), label="Val Acc")
-plt.legend(); plt.grid()
-plt.savefig("accuracy.png"); plt.show()
+plt.plot(smooth_curve(train_accs), label="Train Accuracy")
+plt.plot(smooth_curve(val_accs), label="Val Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.title("Accuracy Curve")
+plt.legend()
+plt.grid()
+plt.savefig("accuracy.png")
+plt.show()
