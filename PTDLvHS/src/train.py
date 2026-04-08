@@ -13,7 +13,6 @@ from dataset import TripletDataset
 # PATH
 # ========================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
-
 train_path = os.path.join(BASE_DIR, "train")
 val_path   = os.path.join(BASE_DIR, "val")
 
@@ -21,20 +20,21 @@ print("Train exists:", os.path.exists(train_path))
 print("Val exists:", os.path.exists(val_path))
 
 # ========================
-# DEVICE
+# DEVICE (A100)
 # ========================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda")
 print("Using device:", device)
+print("GPU:", torch.cuda.get_device_name(0))
 
 # ========================
-# TRANSFORM (TÁCH RIÊNG)
+# TRANSFORM (STRONG AUG)
 # ========================
 train_transform = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(20),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-    transforms.RandomAffine(degrees=0, translate=(0.05, 0.05)),
+    transforms.RandomRotation(30),
+    transforms.ColorJitter(0.3, 0.3, 0.3),
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
     transforms.ToTensor()
 ])
 
@@ -49,8 +49,9 @@ val_transform = transforms.Compose([
 train_dataset = TripletDataset(train_path, transform=train_transform)
 val_dataset   = TripletDataset(val_path, transform=val_transform)
 
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-val_loader   = DataLoader(val_dataset, batch_size=32)
+# A100 → batch lớn
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+val_loader   = DataLoader(val_dataset, batch_size=64, num_workers=4, pin_memory=True)
 
 # ========================
 # MODEL
@@ -60,8 +61,22 @@ model = EmbeddingModel().to(device)
 # ========================
 # LOSS + OPTIMIZER
 # ========================
-criterion = nn.TripletMarginLoss(margin=1.0)
-optimizer = torch.optim.Adam(model.parameters(), lr=5e-5, weight_decay=1e-4)
+criterion = nn.TripletMarginLoss(margin=1.2)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=1e-4)
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',
+    factor=0.5,
+    patience=2,
+    verbose=True
+)
+
+# ========================
+# MIXED PRECISION (A100 cực mạnh)
+# ========================
+scaler = torch.cuda.amp.GradScaler()
 
 # ========================
 # ACCURACY FUNCTION
@@ -80,7 +95,7 @@ counter = 0
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 15
+epochs = 20
 best_val_loss = float("inf")
 
 train_losses = []
@@ -101,15 +116,23 @@ for epoch in range(epochs):
     for a, p, n in tqdm(train_loader):
         a, p, n = a.to(device), p.to(device), n.to(device)
 
-        emb_a = model(a)
-        emb_p = model(p)
-        emb_n = model(n)
-
-        loss = criterion(emb_a, emb_p, emb_n)
-
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+        # AMP
+        with torch.cuda.amp.autocast():
+            emb_a = model(a)
+            emb_p = model(p)
+            emb_n = model(n)
+
+            loss = criterion(emb_a, emb_p, emb_n)
+
+        scaler.scale(loss).backward()
+
+        # chống rung gradient
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
 
@@ -152,6 +175,9 @@ for epoch in range(epochs):
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
+    # scheduler (cực quan trọng)
+    scheduler.step(val_loss)
+
     # ========================
     # SAVE + EARLY STOPPING
     # ========================
@@ -170,7 +196,7 @@ for epoch in range(epochs):
 # ========================
 # SMOOTH FUNCTION
 # ========================
-def smooth_curve(values, weight=0.8):
+def smooth_curve(values, weight=0.9):
     smoothed = []
     last = values[0]
     for v in values:
