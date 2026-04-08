@@ -94,7 +94,7 @@ counter = 0
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 20
+epochs = 25
 best_val_loss = float("inf")
 
 train_losses = []
