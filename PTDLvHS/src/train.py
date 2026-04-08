@@ -129,7 +129,7 @@ best_val_loss = float("inf")
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 35
+epochs = 40
 train_losses = []
 val_losses = []
 train_accs = []
