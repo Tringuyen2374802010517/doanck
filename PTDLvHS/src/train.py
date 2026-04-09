@@ -49,8 +49,8 @@ val_transform = transforms.Compose([
 # =====================
 # DATASET
 # =====================
-train_dataset = TripletDataset(train_dir, transform=train_transform, length=10000)
-val_dataset = TripletDataset(val_dir, transform=val_transform, length=4000)
+train_dataset = TripletDataset(train_dir, transform=train_transform, length=500)
+val_dataset = TripletDataset(val_dir, transform=val_transform, length=100)
 
 num_classes = len(train_dataset.classes)
 print("Number of classes:", num_classes)
