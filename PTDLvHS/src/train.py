@@ -32,7 +32,7 @@ print("Val exists:", os.path.exists(val_dir))
 # TRANSFORM
 # =====================
 train_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((300, 300)),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.RandomRotation(5),
     transforms.ColorJitter(0.1, 0.1, 0.1),
@@ -40,7 +40,7 @@ train_transform = transforms.Compose([
 ])
 
 val_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((300, 300)),
     transforms.ToTensor()
 ])
 
@@ -55,7 +55,7 @@ print("Number of classes:", num_classes)
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=64,
+    batch_size=32,
     shuffle=True,
     num_workers=2,
     pin_memory=True
@@ -63,7 +63,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=64,
+    batch_size=32,
     shuffle=False,
     num_workers=2,
     pin_memory=True
@@ -85,7 +85,7 @@ criterion_cls = nn.CrossEntropyLoss(label_smoothing=0.1)
 # =====================
 optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=5e-5,
+    lr=3e-5,
     weight_decay=1e-4
 )
 

@@ -8,16 +8,27 @@ class EmbeddingModel(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
 
-        self.backbone = timm.create_model("resnet50", pretrained=True)
+        # =====================
+        # BACKBONE: EfficientNet-B3
+        # =====================
+        self.backbone = timm.create_model(
+            "efficientnet_b3",
+            pretrained=True,
+            num_classes=0
+        )
 
-        # Freeze all except layer4
+        in_features = self.backbone.num_features
+
+        # =====================
+        # Freeze phần đầu, chỉ train block cuối
+        # =====================
         for name, param in self.backbone.named_parameters():
-            if "layer4" not in name:
+            if "blocks.5" not in name and "blocks.6" not in name:
                 param.requires_grad = False
 
-        in_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Identity()
-
+        # =====================
+        # Multi-head embedding
+        # =====================
         def make_head():
             return nn.Sequential(
                 nn.Linear(in_features, 256),
