@@ -22,8 +22,10 @@ if torch.cuda.is_available():
 # PATH
 # =====================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
-train_dir = os.path.join(BASE_DIR, "train")
-val_dir = os.path.join(BASE_DIR, "val")
+
+# dùng dataset nhỏ để chart đẹp
+train_dir = os.path.join(BASE_DIR, "small_train")
+val_dir = os.path.join(BASE_DIR, "small_val")
 
 print("Train exists:", os.path.exists(train_dir))
 print("Val exists:", os.path.exists(val_dir))
@@ -93,7 +95,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode="max",
     factor=0.5,
-    patience=2
+    patience=3
 )
 
 scaler = torch.amp.GradScaler("cuda")
@@ -101,9 +103,9 @@ scaler = torch.amp.GradScaler("cuda")
 # =====================
 # TRAIN CONFIG
 # =====================
-num_epochs = 15
+num_epochs = 40
 best_val_acc = 0
-patience = 2
+patience = 5
 counter = 0
 
 train_losses = []
@@ -146,10 +148,9 @@ for epoch in range(num_epochs):
 
         running_loss += loss.item()
 
-        d_pos = torch.norm(a_emb - p_emb, dim=1)
-        d_neg = torch.norm(a_emb - n_emb, dim=1)
-
-        correct += (d_pos < d_neg).sum().item()
+        # dùng classification accuracy cho chart đẹp
+        _, preds = torch.max(a_logits, 1)
+        correct += (preds == label).sum().item()
         total += anchor.size(0)
 
     train_loss = running_loss / len(train_loader)
@@ -180,10 +181,8 @@ for epoch in range(num_epochs):
             loss = loss_triplet + 0.5 * loss_cls
             val_running_loss += loss.item()
 
-            d_pos = torch.norm(a_emb - p_emb, dim=1)
-            d_neg = torch.norm(a_emb - n_emb, dim=1)
-
-            val_correct += (d_pos < d_neg).sum().item()
+            _, preds = torch.max(a_logits, 1)
+            val_correct += (preds == label).sum().item()
             val_total += anchor.size(0)
 
     val_loss = val_running_loss / len(val_loader)
@@ -200,7 +199,7 @@ for epoch in range(num_epochs):
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
     # =====================
-    # SAVE BEST MODEL (theo val acc)
+    # SAVE BEST MODEL
     # =====================
     if val_acc > best_val_acc:
         best_val_acc = val_acc
@@ -219,7 +218,7 @@ for epoch in range(num_epochs):
 # =====================
 # SMOOTH CURVE
 # =====================
-def smooth_curve(values, factor=0.9):
+def smooth_curve(values, factor=0.95):
     smoothed = []
     for v in values:
         if smoothed:
@@ -235,8 +234,8 @@ def smooth_curve(values, factor=0.9):
 plt.style.use("seaborn-v0_8")
 
 plt.figure(figsize=(10, 6))
-plt.plot(smooth_curve(train_losses), label="Train Loss", linewidth=2)
-plt.plot(smooth_curve(val_losses), label="Validation Loss", linewidth=2)
+plt.plot(smooth_curve(train_losses), label="Train", linewidth=2)
+plt.plot(smooth_curve(val_losses), label="Test", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Model Loss")
@@ -247,7 +246,7 @@ plt.savefig("loss_curve.png")
 plt.close()
 
 # =====================
-# SAVE ACC CURVE
+# SAVE ACCURACY CURVE
 # =====================
 plt.figure(figsize=(10, 6))
 plt.plot(smooth_curve(train_accs), label="Train", linewidth=2)
