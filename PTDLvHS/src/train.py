@@ -91,9 +91,9 @@ optimizer = torch.optim.AdamW(
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
-    mode="min",
+    mode="max",
     factor=0.5,
-    patience=3
+    patience=2
 )
 
 scaler = torch.amp.GradScaler("cuda")
@@ -101,9 +101,9 @@ scaler = torch.amp.GradScaler("cuda")
 # =====================
 # TRAIN CONFIG
 # =====================
-num_epochs = 30
-best_val_loss = float("inf")
-patience = 4
+num_epochs = 15
+best_val_acc = 0
+patience = 2
 counter = 0
 
 train_losses = []
@@ -189,7 +189,7 @@ for epoch in range(num_epochs):
     val_loss = val_running_loss / len(val_loader)
     val_acc = val_correct / val_total
 
-    scheduler.step(val_loss)
+    scheduler.step(val_acc)
 
     train_losses.append(train_loss)
     val_losses.append(val_loss)
@@ -199,8 +199,11 @@ for epoch in range(num_epochs):
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
-    if val_loss < best_val_loss:
-        best_val_loss = val_loss
+    # =====================
+    # SAVE BEST MODEL (theo val acc)
+    # =====================
+    if val_acc > best_val_acc:
+        best_val_acc = val_acc
         torch.save(model.state_dict(), "best_model.pth")
         print("Saved best model!")
         counter = 0
@@ -212,10 +215,11 @@ for epoch in range(num_epochs):
         print("Early stopping")
         break
 
+
 # =====================
-# SMOOTH CURVE FUNCTION
+# SMOOTH CURVE
 # =====================
-def smooth_curve(values, factor=0.8):
+def smooth_curve(values, factor=0.9):
     smoothed = []
     for v in values:
         if smoothed:
@@ -223,6 +227,7 @@ def smooth_curve(values, factor=0.8):
         else:
             smoothed.append(v)
     return smoothed
+
 
 # =====================
 # SAVE LOSS CURVE
@@ -234,7 +239,7 @@ plt.plot(smooth_curve(train_losses), label="Train Loss", linewidth=2)
 plt.plot(smooth_curve(val_losses), label="Validation Loss", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
-plt.title("Training vs Validation Loss")
+plt.title("Model Loss")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
@@ -242,14 +247,14 @@ plt.savefig("loss_curve.png")
 plt.close()
 
 # =====================
-# SAVE ACCURACY CURVE
+# SAVE ACC CURVE
 # =====================
 plt.figure(figsize=(10, 6))
-plt.plot(smooth_curve(train_accs), label="Train Accuracy", linewidth=2)
-plt.plot(smooth_curve(val_accs), label="Validation Accuracy", linewidth=2)
+plt.plot(smooth_curve(train_accs), label="Train", linewidth=2)
+plt.plot(smooth_curve(val_accs), label="Test", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
-plt.title("Accuracy Curve")
+plt.title("Model Accuracy")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
