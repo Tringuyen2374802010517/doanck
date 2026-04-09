@@ -32,11 +32,10 @@ print("Val exists:", os.path.exists(val_dir))
 # TRANSFORM
 # =====================
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.85, 1.0)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(8),
-    transforms.ColorJitter(0.15, 0.15, 0.15),
-    transforms.RandomPerspective(distortion_scale=0.1, p=0.2),
+    transforms.Resize((224, 224)),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomRotation(5),
+    transforms.ColorJitter(0.1, 0.1, 0.1),
     transforms.ToTensor()
 ])
 
@@ -102,9 +101,9 @@ scaler = torch.amp.GradScaler("cuda")
 # =====================
 # TRAIN CONFIG
 # =====================
-num_epochs = 40
+num_epochs = 30
 best_val_loss = float("inf")
-patience = 5
+patience = 4
 counter = 0
 
 train_losses = []
@@ -138,6 +137,7 @@ for epoch in range(num_epochs):
 
             loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
             loss_cls = criterion_cls(a_logits, label)
+
             loss = loss_triplet + 0.5 * loss_cls
 
         scaler.scale(loss).backward()
@@ -176,8 +176,8 @@ for epoch in range(num_epochs):
 
             loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
             loss_cls = criterion_cls(a_logits, label)
-            loss = loss_triplet + 0.5 * loss_cls
 
+            loss = loss_triplet + 0.5 * loss_cls
             val_running_loss += loss.item()
 
             d_pos = torch.norm(a_emb - p_emb, dim=1)
@@ -213,13 +213,25 @@ for epoch in range(num_epochs):
         break
 
 # =====================
+# SMOOTH CURVE FUNCTION
+# =====================
+def smooth_curve(values, factor=0.8):
+    smoothed = []
+    for v in values:
+        if smoothed:
+            smoothed.append(smoothed[-1] * factor + v * (1 - factor))
+        else:
+            smoothed.append(v)
+    return smoothed
+
+# =====================
 # SAVE LOSS CURVE
 # =====================
 plt.style.use("seaborn-v0_8")
 
 plt.figure(figsize=(10, 6))
-plt.plot(train_losses, label="Train Loss", linewidth=2)
-plt.plot(val_losses, label="Validation Loss", linewidth=2)
+plt.plot(smooth_curve(train_losses), label="Train Loss", linewidth=2)
+plt.plot(smooth_curve(val_losses), label="Validation Loss", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Training vs Validation Loss")
@@ -233,8 +245,8 @@ plt.close()
 # SAVE ACCURACY CURVE
 # =====================
 plt.figure(figsize=(10, 6))
-plt.plot(train_accs, label="Train Accuracy", linewidth=2)
-plt.plot(val_accs, label="Validation Accuracy", linewidth=2)
+plt.plot(smooth_curve(train_accs), label="Train Accuracy", linewidth=2)
+plt.plot(smooth_curve(val_accs), label="Validation Accuracy", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Accuracy Curve")
