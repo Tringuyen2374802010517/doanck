@@ -1,5 +1,3 @@
-# train.py
-
 import os
 import torch
 import torch.nn as nn
@@ -34,11 +32,11 @@ print("Val exists:", os.path.exists(val_dir))
 # TRANSFORM
 # =====================
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.75, 1.0)),
+    transforms.RandomResizedCrop(224, scale=(0.85, 1.0)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(15),
-    transforms.ColorJitter(0.3, 0.3, 0.3),
-    transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+    transforms.RandomRotation(8),
+    transforms.ColorJitter(0.15, 0.15, 0.15),
+    transforms.RandomPerspective(distortion_scale=0.1, p=0.2),
     transforms.ToTensor()
 ])
 
@@ -81,14 +79,14 @@ model = EmbeddingModel(num_classes=num_classes).to(device)
 # LOSS
 # =====================
 criterion_triplet = nn.TripletMarginLoss(margin=0.5)
-criterion_cls = nn.CrossEntropyLoss()
+criterion_cls = nn.CrossEntropyLoss(label_smoothing=0.1)
 
 # =====================
 # OPTIMIZER
 # =====================
 optimizer = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=1e-4,
+    lr=5e-5,
     weight_decay=1e-4
 )
 
@@ -106,7 +104,7 @@ scaler = torch.amp.GradScaler("cuda")
 # =====================
 num_epochs = 40
 best_val_loss = float("inf")
-patience = 8
+patience = 5
 counter = 0
 
 train_losses = []
@@ -118,7 +116,7 @@ val_accs = []
 # TRAIN LOOP
 # =====================
 for epoch in range(num_epochs):
-    print(f"\nEpoch {epoch+1}/{num_epochs}")
+    print(f"\nEpoch {epoch + 1}/{num_epochs}")
 
     model.train()
     running_loss = 0
@@ -126,10 +124,10 @@ for epoch in range(num_epochs):
     total = 0
 
     for anchor, positive, negative, label in tqdm(train_loader):
-        anchor = anchor.to(device)
-        positive = positive.to(device)
-        negative = negative.to(device)
-        label = label.to(device)
+        anchor = anchor.to(device, non_blocking=True)
+        positive = positive.to(device, non_blocking=True)
+        negative = negative.to(device, non_blocking=True)
+        label = label.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -140,7 +138,6 @@ for epoch in range(num_epochs):
 
             loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
             loss_cls = criterion_cls(a_logits, label)
-
             loss = loss_triplet + 0.5 * loss_cls
 
         scaler.scale(loss).backward()
@@ -168,10 +165,10 @@ for epoch in range(num_epochs):
 
     with torch.no_grad():
         for anchor, positive, negative, label in tqdm(val_loader):
-            anchor = anchor.to(device)
-            positive = positive.to(device)
-            negative = negative.to(device)
-            label = label.to(device)
+            anchor = anchor.to(device, non_blocking=True)
+            positive = positive.to(device, non_blocking=True)
+            negative = negative.to(device, non_blocking=True)
+            label = label.to(device, non_blocking=True)
 
             a_emb, a_logits = model(anchor)
             p_emb, _ = model(positive)
@@ -179,8 +176,8 @@ for epoch in range(num_epochs):
 
             loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
             loss_cls = criterion_cls(a_logits, label)
-
             loss = loss_triplet + 0.5 * loss_cls
+
             val_running_loss += loss.item()
 
             d_pos = torch.norm(a_emb - p_emb, dim=1)
@@ -216,27 +213,35 @@ for epoch in range(num_epochs):
         break
 
 # =====================
-# PLOT LOSS
+# SAVE LOSS CURVE
 # =====================
-plt.figure(figsize=(8, 5))
-plt.plot(train_losses, label="Train Loss")
-plt.plot(val_losses, label="Validation Loss")
+plt.style.use("seaborn-v0_8")
+
+plt.figure(figsize=(10, 6))
+plt.plot(train_losses, label="Train Loss", linewidth=2)
+plt.plot(val_losses, label="Validation Loss", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Training vs Validation Loss")
 plt.legend()
 plt.grid(True)
-plt.show()
+plt.tight_layout()
+plt.savefig("loss_curve.png")
+plt.close()
 
 # =====================
-# PLOT ACCURACY
+# SAVE ACCURACY CURVE
 # =====================
-plt.figure(figsize=(8, 5))
-plt.plot(train_accs, label="Train Accuracy")
-plt.plot(val_accs, label="Validation Accuracy")
+plt.figure(figsize=(10, 6))
+plt.plot(train_accs, label="Train Accuracy", linewidth=2)
+plt.plot(val_accs, label="Validation Accuracy", linewidth=2)
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Accuracy Curve")
 plt.legend()
 plt.grid(True)
-plt.show()
+plt.tight_layout()
+plt.savefig("accuracy_curve.png")
+plt.close()
+
+print("Saved charts successfully!")
