@@ -1,74 +1,69 @@
-import os
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
 from tqdm import tqdm
+import os
 
 from model import EmbeddingModel
 from dataset import TripletDataset
 
 # ========================
+# DEVICE
+# ========================
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+
+# ========================
 # PATH
 # ========================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
-train_path = os.path.join(BASE_DIR, "train")
-val_path = os.path.join(BASE_DIR, "val")
+train_dir = os.path.join(BASE_DIR, "train")
+val_dir = os.path.join(BASE_DIR, "val")
 
-print("Train exists:", os.path.exists(train_path))
-print("Val exists:", os.path.exists(val_path))
-
-# ========================
-# DEVICE
-# ========================
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print("Using device: cuda")
-    try:
-        print("GPU:", torch.cuda.get_device_name(0))
-    except:
-        print("Không lấy được tên GPU")
-else:
-    device = torch.device("cpu")
-    print("Using device: cpu")
+print("Train exists:", os.path.exists(train_dir))
+print("Val exists:", os.path.exists(val_dir))
 
 # ========================
 # TRANSFORM
 # ========================
-train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224, scale=(0.9, 1.0)),
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
-    transforms.ColorJitter(0.15, 0.15, 0.15),
-    transforms.ToTensor(),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.ToTensor()
 ])
 
 val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.ToTensor(),
+    transforms.ToTensor()
 ])
 
 # ========================
 # DATASET
 # ========================
-train_dataset = TripletDataset(train_path, transform=train_transform)
-val_dataset = TripletDataset(val_path, transform=val_transform)
+train_dataset = TripletDataset(train_dir, transform=transform)
+val_dataset = TripletDataset(val_dir, transform=val_transform)
 
 train_loader = DataLoader(
     train_dataset,
     batch_size=128,
     shuffle=True,
-    num_workers=4,
-    pin_memory=True,
+    num_workers=2,
+    pin_memory=True
 )
 
 val_loader = DataLoader(
     val_dataset,
     batch_size=128,
     shuffle=False,
-    num_workers=4,
-    pin_memory=True,
+    num_workers=2,
+    pin_memory=True
 )
 
 # ========================
@@ -77,59 +72,33 @@ val_loader = DataLoader(
 model = EmbeddingModel().to(device)
 
 # ========================
-# LOSS + OPTIMIZER
+# LOSS / OPTIMIZER
 # ========================
-criterion = nn.TripletMarginLoss(margin=1.0)
+criterion = nn.TripletMarginLoss(margin=0.8)
 
 optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=3e-5,
-    weight_decay=1e-4,
+    filter(lambda p: p.requires_grad, model.parameters()),
+    lr=2e-5,
+    weight_decay=1e-4
 )
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode="min",
-    factor=0.3,
-    patience=2,
+    factor=0.5,
+    patience=2
 )
 
-# ========================
-# MIXED PRECISION
-# ========================
-scaler = torch.amp.GradScaler("cuda") if torch.cuda.is_available() else None
-
-# ========================
-# ACCURACY FUNCTION
-# ========================
-def triplet_accuracy(a, p, n):
-    dist_ap = torch.norm(a - p, dim=1)
-    dist_an = torch.norm(a - n, dim=1)
-    return (dist_ap < dist_an).float().mean().item()
-
-# ========================
-# SMOOTH FUNCTION
-# ========================
-def smooth_curve(values, weight=0.95):
-    smoothed = []
-    last = values[0]
-    for v in values:
-        s = last * weight + (1 - weight) * v
-        smoothed.append(s)
-        last = s
-    return smoothed
-
-# ========================
-# EARLY STOPPING
-# ========================
-patience = 5
-counter = 0
-best_val_loss = float("inf")
+scaler = torch.amp.GradScaler("cuda")
 
 # ========================
 # TRAIN CONFIG
 # ========================
-epochs = 40
+num_epochs = 40
+best_val_loss = float("inf")
+patience = 5
+counter = 0
+
 train_losses = []
 val_losses = []
 train_accs = []
@@ -138,86 +107,82 @@ val_accs = []
 # ========================
 # TRAIN LOOP
 # ========================
-for epoch in range(epochs):
+for epoch in range(num_epochs):
+    print(f"\nEpoch {epoch+1}/{num_epochs}")
+
+    # ----- TRAIN -----
     model.train()
-    total_loss = 0
-    total_acc = 0
+    running_loss = 0
+    correct = 0
+    total = 0
 
-    print(f"\nEpoch {epoch + 1}/{epochs}")
-
-    for a, p, n in tqdm(train_loader):
-        a = a.to(device)
-        p = p.to(device)
-        n = n.to(device)
+    for anchor, positive, negative in tqdm(train_loader):
+        anchor = anchor.to(device)
+        positive = positive.to(device)
+        negative = negative.to(device)
 
         optimizer.zero_grad()
 
-        if scaler is not None:
-            with torch.amp.autocast("cuda"):
-                emb_a = model(a)
-                emb_p = model(p)
-                emb_n = model(n)
-                loss = criterion(emb_a, emb_p, emb_n)
+        with torch.amp.autocast("cuda"):
+            anchor_out = model(anchor)
+            positive_out = model(positive)
+            negative_out = model(negative)
 
-            scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            emb_a = model(a)
-            emb_p = model(p)
-            emb_n = model(n)
-            loss = criterion(emb_a, emb_p, emb_n)
+            loss = criterion(anchor_out, positive_out, negative_out)
 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
-        total_loss += loss.item()
-        total_acc += triplet_accuracy(emb_a, emb_p, emb_n)
+        running_loss += loss.item()
 
-    train_loss = total_loss / len(train_loader)
-    train_acc = total_acc / len(train_loader)
+        d_pos = torch.norm(anchor_out - positive_out, dim=1)
+        d_neg = torch.norm(anchor_out - negative_out, dim=1)
+        correct += (d_pos < d_neg).sum().item()
+        total += anchor.size(0)
 
-    train_losses.append(train_loss)
-    train_accs.append(train_acc)
+    train_loss = running_loss / len(train_loader)
+    train_acc = correct / total
 
-    # ========================
-    # VALIDATION
-    # ========================
+    # ----- VALIDATION -----
     model.eval()
-    total_val_loss = 0
-    total_val_acc = 0
+    val_running_loss = 0
+    val_correct = 0
+    val_total = 0
 
     with torch.no_grad():
-        for a, p, n in val_loader:
-            a = a.to(device)
-            p = p.to(device)
-            n = n.to(device)
+        for anchor, positive, negative in tqdm(val_loader):
+            anchor = anchor.to(device)
+            positive = positive.to(device)
+            negative = negative.to(device)
 
-            emb_a = model(a)
-            emb_p = model(p)
-            emb_n = model(n)
+            anchor_out = model(anchor)
+            positive_out = model(positive)
+            negative_out = model(negative)
 
-            loss = criterion(emb_a, emb_p, emb_n)
+            loss = criterion(anchor_out, positive_out, negative_out)
+            val_running_loss += loss.item()
 
-            total_val_loss += loss.item()
-            total_val_acc += triplet_accuracy(emb_a, emb_p, emb_n)
+            d_pos = torch.norm(anchor_out - positive_out, dim=1)
+            d_neg = torch.norm(anchor_out - negative_out, dim=1)
+            val_correct += (d_pos < d_neg).sum().item()
+            val_total += anchor.size(0)
 
-    val_loss = total_val_loss / len(val_loader)
-    val_acc = total_val_acc / len(val_loader)
+    val_loss = val_running_loss / len(val_loader)
+    val_acc = val_correct / val_total
 
+    scheduler.step(val_loss)
+
+    # Save metrics
+    train_losses.append(train_loss)
     val_losses.append(val_loss)
+    train_accs.append(train_acc)
     val_accs.append(val_acc)
 
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
-    scheduler.step(val_loss)
-
-    # ========================
-    # SAVE MODEL + EARLY STOP
-    # ========================
+    # Save best model
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), "best_model.pth")
@@ -227,34 +192,33 @@ for epoch in range(epochs):
         counter += 1
         print(f"No improvement: {counter}/{patience}")
 
-        if counter >= patience:
-            print("⏹ Early stopping")
-            break
+    # Early stopping
+    if counter >= patience:
+        print("⏹ Early stopping")
+        break
 
 # ========================
 # PLOT LOSS
 # ========================
 plt.figure(figsize=(8, 5))
-plt.plot(smooth_curve(train_losses), label="Train Loss")
-plt.plot(smooth_curve(val_losses), label="Validation Loss")
+plt.plot(train_losses, label="Train Loss")
+plt.plot(val_losses, label="Validation Loss")
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
 plt.title("Training vs Validation Loss")
 plt.legend()
 plt.grid(True)
-plt.savefig("loss.png")
 plt.show()
 
 # ========================
 # PLOT ACCURACY
 # ========================
 plt.figure(figsize=(8, 5))
-plt.plot(smooth_curve(train_accs), label="Train Accuracy")
-plt.plot(smooth_curve(val_accs), label="Validation Accuracy")
+plt.plot(train_accs, label="Train Accuracy")
+plt.plot(val_accs, label="Validation Accuracy")
 plt.xlabel("Epoch")
 plt.ylabel("Accuracy")
 plt.title("Accuracy Curve")
 plt.legend()
 plt.grid(True)
-plt.savefig("accuracy.png")
 plt.show()
