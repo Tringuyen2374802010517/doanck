@@ -2,8 +2,11 @@ import numpy as np
 import torch
 
 def predict_image(model, image, embeddings, labels, class_names, full_labels, top_k=3):
+    model.eval()
+
     with torch.no_grad():
-        emb = model(image).cpu().numpy()
+        emb, _ = model(image)   # lấy embedding thôi
+        emb = emb.cpu().numpy()
 
     sims = embeddings @ emb.T
     sims = sims.squeeze()
@@ -14,8 +17,8 @@ def predict_image(model, image, embeddings, labels, class_names, full_labels, to
 
     for idx in top_indices:
         results.append({
-            "pill_code": str(class_names[labels[idx]]),   # mã thuốc ngắn
-            "full_label": str(full_labels[idx]),          # mã đầy đủ
+            "pill_code": str(class_names[labels[idx]]),
+            "full_label": str(full_labels[idx]),
             "score": round(float(sims[idx]) * 100, 2)
         })
 

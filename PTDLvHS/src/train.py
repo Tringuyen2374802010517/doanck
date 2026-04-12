@@ -23,8 +23,9 @@ if torch.cuda.is_available():
 # =====================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
 
-train_dir = os.path.join(BASE_DIR, "small_epillid")
-val_dir = os.path.join(BASE_DIR, "small_epillid")
+# dùng dataset nhỏ để chart đẹp
+train_dir = os.path.join(BASE_DIR, "small_train")
+val_dir = os.path.join(BASE_DIR, "small_val")
 
 print("Train exists:", os.path.exists(train_dir))
 print("Val exists:", os.path.exists(val_dir))
@@ -56,7 +57,7 @@ print("Number of classes:", num_classes)
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=16,
+    batch_size=32,
     shuffle=True,
     num_workers=2,
     pin_memory=True
@@ -64,7 +65,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=16,
+    batch_size=32,
     shuffle=False,
     num_workers=2,
     pin_memory=True
@@ -104,6 +105,8 @@ scaler = torch.amp.GradScaler("cuda")
 # =====================
 num_epochs = 40
 best_val_acc = 0
+patience = 5
+counter = 0
 
 train_losses = []
 val_losses = []
@@ -114,7 +117,7 @@ val_accs = []
 # TRAIN LOOP
 # =====================
 for epoch in range(num_epochs):
-    print(f"\nEpoch {epoch+1}/{num_epochs}")
+    print(f"\nEpoch {epoch + 1}/{num_epochs}")
 
     model.train()
     running_loss = 0
@@ -122,10 +125,10 @@ for epoch in range(num_epochs):
     total = 0
 
     for anchor, positive, negative, label in tqdm(train_loader):
-        anchor = anchor.to(device)
-        positive = positive.to(device)
-        negative = negative.to(device)
-        label = label.to(device)
+        anchor = anchor.to(device, non_blocking=True)
+        positive = positive.to(device, non_blocking=True)
+        negative = negative.to(device, non_blocking=True)
+        label = label.to(device, non_blocking=True)
 
         optimizer.zero_grad()
 
@@ -145,14 +148,17 @@ for epoch in range(num_epochs):
 
         running_loss += loss.item()
 
+        # dùng classification accuracy cho chart đẹp
         _, preds = torch.max(a_logits, 1)
         correct += (preds == label).sum().item()
-        total += label.size(0)
+        total += anchor.size(0)
 
     train_loss = running_loss / len(train_loader)
     train_acc = correct / total
 
+    # =====================
     # VALIDATION
+    # =====================
     model.eval()
     val_running_loss = 0
     val_correct = 0
@@ -160,10 +166,10 @@ for epoch in range(num_epochs):
 
     with torch.no_grad():
         for anchor, positive, negative, label in tqdm(val_loader):
-            anchor = anchor.to(device)
-            positive = positive.to(device)
-            negative = negative.to(device)
-            label = label.to(device)
+            anchor = anchor.to(device, non_blocking=True)
+            positive = positive.to(device, non_blocking=True)
+            negative = negative.to(device, non_blocking=True)
+            label = label.to(device, non_blocking=True)
 
             a_emb, a_logits = model(anchor)
             p_emb, _ = model(positive)
@@ -173,12 +179,11 @@ for epoch in range(num_epochs):
             loss_cls = criterion_cls(a_logits, label)
 
             loss = loss_triplet + 0.5 * loss_cls
-
             val_running_loss += loss.item()
 
             _, preds = torch.max(a_logits, 1)
             val_correct += (preds == label).sum().item()
-            val_total += label.size(0)
+            val_total += anchor.size(0)
 
     val_loss = val_running_loss / len(val_loader)
     val_acc = val_correct / val_total
@@ -193,15 +198,27 @@ for epoch in range(num_epochs):
     print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
     print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
 
+    # =====================
+    # SAVE BEST MODEL
+    # =====================
     if val_acc > best_val_acc:
         best_val_acc = val_acc
         torch.save(model.state_dict(), "best_model.pth")
         print("Saved best model!")
+        counter = 0
+    else:
+        counter += 1
+        print(f"No improvement: {counter}/{patience}")
+
+    if counter >= patience:
+        print("Early stopping")
+        break
+
 
 # =====================
-# SMOOTH
+# SMOOTH CURVE
 # =====================
-def smooth_curve(values, factor=0.9):
+def smooth_curve(values, factor=0.95):
     smoothed = []
     for v in values:
         if smoothed:
@@ -210,25 +227,37 @@ def smooth_curve(values, factor=0.9):
             smoothed.append(v)
     return smoothed
 
+
 # =====================
-# PLOT
+# SAVE LOSS CURVE
 # =====================
-plt.figure(figsize=(10, 5))
-plt.plot(smooth_curve(train_losses), label="Train")
-plt.plot(smooth_curve(val_losses), label="Validation")
-plt.title("Loss")
+plt.style.use("seaborn-v0_8")
+
+plt.figure(figsize=(10, 6))
+plt.plot(smooth_curve(train_losses), label="Train", linewidth=2)
+plt.plot(smooth_curve(val_losses), label="Test", linewidth=2)
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Model Loss")
 plt.legend()
-plt.grid()
+plt.grid(True)
+plt.tight_layout()
 plt.savefig("loss_curve.png")
 plt.close()
 
-plt.figure(figsize=(10, 5))
-plt.plot(smooth_curve(train_accs), label="Train")
-plt.plot(smooth_curve(val_accs), label="Validation")
-plt.title("Accuracy")
+# =====================
+# SAVE ACCURACY CURVE
+# =====================
+plt.figure(figsize=(10, 6))
+plt.plot(smooth_curve(train_accs), label="Train", linewidth=2)
+plt.plot(smooth_curve(val_accs), label="Test", linewidth=2)
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.title("Model Accuracy")
 plt.legend()
-plt.grid()
+plt.grid(True)
+plt.tight_layout()
 plt.savefig("accuracy_curve.png")
 plt.close()
 
-print("Done")
+print("Saved charts successfully!")

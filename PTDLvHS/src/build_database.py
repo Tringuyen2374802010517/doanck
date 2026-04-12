@@ -82,9 +82,10 @@ for img_path, label in dataset.samples:
         img = transform(img).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            emb = model(img).cpu().numpy()
+            emb, _ = model(img)
 
-        embeddings.append(emb)
+        embeddings.append(emb.cpu().numpy())
+
         labels.append(label)
 
         filename = os.path.basename(img_path)

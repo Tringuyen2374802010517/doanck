@@ -1,3 +1,6 @@
+import os
+import json
+from datetime import datetime
 from flask import Flask, render_template, request
 from PIL import Image
 import torch
@@ -9,57 +12,95 @@ from src.predict import predict_image
 
 app = Flask(__name__)
 
+UPLOAD_FOLDER = "static/uploads"
+HISTORY_FILE = "static/history.json"
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
 # ========================
-# LOAD MODEL
+# LOAD DATA
 # ========================
-model = EmbeddingModel()
+class_names = np.load("class_names.npy", allow_pickle=True)
+num_classes = len(class_names)
+
+model = EmbeddingModel(num_classes=num_classes)
 model.load_state_dict(torch.load("best_model.pth", map_location="cpu"))
 model.eval()
 
-# ========================
-# LOAD DATABASE
-# ========================
 embeddings = np.load("embeddings.npy")
 labels = np.load("labels.npy")
-class_names = np.load("class_names.npy", allow_pickle=True)
 full_labels = np.load("full_labels.npy", allow_pickle=True)
 
 # ========================
-# IMAGE TRANSFORM
+# TRANSFORM
 # ========================
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((300, 300)),
     transforms.ToTensor()
 ])
 
 # ========================
-# HOME PAGE
+# HISTORY
+# ========================
+if not os.path.exists(HISTORY_FILE):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump([], f)
+
+def save_history(data):
+    with open(HISTORY_FILE, "r") as f:
+        history = json.load(f)
+
+    history.append(data)
+
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+# ========================
+# ROUTE
 # ========================
 @app.route("/", methods=["GET", "POST"])
 def index():
-    results = None
+    results = []
+    images = []
 
     if request.method == "POST":
-        file = request.files["file"]
+        files = request.files.getlist("files")
 
-        if file:
-            img = Image.open(file).convert("RGB")
-            img = transform(img).unsqueeze(0)
+        for file in files:
+            if file:
+                filename = datetime.now().strftime("%H%M%S_") + file.filename
+                path = os.path.join(UPLOAD_FOLDER, filename)
+                file.save(path)
 
-            results = predict_image(
-                model,
-                img,
-                embeddings,
-                labels,
-                class_names,
-                full_labels,
-                top_k=3
-            )
+                images.append(path)
 
-    return render_template("index.html", results=results)
+                img = Image.open(path).convert("RGB")
+                img = transform(img).unsqueeze(0)
+
+                res = predict_image(
+                    model,
+                    img,
+                    embeddings,
+                    labels,
+                    class_names,
+                    full_labels
+                )
+
+                results.append(res)
+
+        save_history({
+            "time": str(datetime.now()),
+            "images": images,
+            "results": results
+        })
+
+    # 🔥 FIX QUAN TRỌNG
+    pairs = list(zip(images, results))
+
+    return render_template("index.html", pairs=pairs)
 
 # ========================
-# RUN APP
+# RUN
 # ========================
 if __name__ == "__main__":
     app.run(debug=True)

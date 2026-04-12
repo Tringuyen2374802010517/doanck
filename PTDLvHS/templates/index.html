@@ -7,27 +7,55 @@
 <body>
 
 <div class="container">
-    <h1>Pill Identification</h1>
+    <h1>Pill Identification AI</h1>
 
     <form method="POST" enctype="multipart/form-data">
-        <input type="file" name="file" required>
+        <input type="file" name="files" multiple required>
         <button type="submit">Predict</button>
     </form>
 
-    {% if results %}
-        <div class="result">
-            <h2>Top 3 thuốc giống nhất</h2>
+    {% if pairs %}
+        <div class="grid">
 
-            {% for item in results %}
-                <div class="pill-card">
-                    <h3>Mã thuốc: {{ item.pill_code }}</h3>
-                    <p><strong>Nhãn đầy đủ:</strong> {{ item.full_label }}</p>
-                    <p><strong>Độ tương đồng:</strong> {{ item.score }}%</p>
-                </div>
-            {% endfor %}
+        {% for img, res in pairs %}
+            <div class="card">
+
+                <img src="{{ img }}" class="preview">
+
+                {% for item in res %}
+                    <div class="result-box">
+
+                        <b>{{ item.pill_code }}</b>
+                        <p>{{ item.full_label }}</p>
+
+                        <div class="bar">
+                            <div class="fill" data-score="{{ item.score }}"></div>
+                        </div>
+
+                        <span>{{ item.score }}%</span>
+
+                    </div>
+                {% endfor %}
+
+            </div>
+        {% endfor %}
+
         </div>
     {% endif %}
 </div>
+
+<!-- JS FIX WIDTH -->
+<script>
+    document.querySelectorAll('.fill').forEach(el => {
+        let score = parseFloat(el.getAttribute('data-score'));
+
+        if (isNaN(score)) score = 0;
+
+        score = Math.max(0, Math.min(score, 100));
+
+        el.style.width = score + "%";
+    });
+</script>
 
 </body>
 </html>
