@@ -24,8 +24,8 @@ if torch.cuda.is_available():
 BASE_DIR = "/content/doanck/PTDLvHS/data"
 
 # dùng dataset nhỏ để chart đẹp
-train_dir = os.path.join(BASE_DIR, "small_train")
-val_dir = os.path.join(BASE_DIR, "small_val")
+train_dir = os.path.join(BASE_DIR, "train")
+val_dir = os.path.join(BASE_DIR, "val")
 
 print("Train exists:", os.path.exists(train_dir))
 print("Val exists:", os.path.exists(val_dir))
