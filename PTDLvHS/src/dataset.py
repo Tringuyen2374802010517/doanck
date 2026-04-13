@@ -9,13 +9,24 @@ class TripletDataset(Dataset):
         self.transform = transform
         self.length = length
 
+        # ===== load class =====
         self.classes = sorted(os.listdir(root))
         self.class_to_images = {}
 
         for c in self.classes:
             folder = os.path.join(root, c)
-            imgs = os.listdir(folder)
-            self.class_to_images[c] = imgs
+
+            # chỉ lấy file ảnh
+            imgs = [img for img in os.listdir(folder) if img.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+            # chỉ giữ class có >= 2 ảnh
+            if len(imgs) >= 2:
+                self.class_to_images[c] = imgs
+
+        # cập nhật lại classes sau khi lọc
+        self.classes = list(self.class_to_images.keys())
+
+        print("Total valid classes:", len(self.classes))
 
     def __len__(self):
         return self.length
@@ -23,13 +34,12 @@ class TripletDataset(Dataset):
     def __getitem__(self, idx):
         # ===== anchor class =====
         c = random.choice(self.classes)
-
         imgs = self.class_to_images[c]
 
-        # chọn anchor + positive
+        # ===== anchor + positive =====
         a_name, p_name = random.sample(imgs, 2)
 
-        # ===== HARD NEGATIVE =====
+        # ===== negative class =====
         neg_c = random.choice(self.classes)
         while neg_c == c:
             neg_c = random.choice(self.classes)
@@ -41,10 +51,15 @@ class TripletDataset(Dataset):
         p_path = os.path.join(self.root, c, p_name)
         n_path = os.path.join(self.root, neg_c, n_name)
 
-        a_img = Image.open(a_path).convert("RGB")
-        p_img = Image.open(p_path).convert("RGB")
-        n_img = Image.open(n_path).convert("RGB")
+        try:
+            a_img = Image.open(a_path).convert("RGB")
+            p_img = Image.open(p_path).convert("RGB")
+            n_img = Image.open(n_path).convert("RGB")
+        except:
+            # fallback nếu ảnh lỗi
+            return self.__getitem__(random.randint(0, self.length - 1))
 
+        # ===== transform =====
         if self.transform:
             a_img = self.transform(a_img)
             p_img = self.transform(p_img)
