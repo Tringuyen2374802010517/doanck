@@ -33,12 +33,24 @@ val_tf = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# ===== DATA =====
-train_ds = TripletDataset(train_dir, train_tf, length=8000)
-val_ds = TripletDataset(val_dir, val_tf, length=2000)
+# ===== DATA (GIẢM LOAD) =====
+train_ds = TripletDataset(train_dir, train_tf, length=2000)
+val_ds = TripletDataset(val_dir, val_tf, length=500)
 
-train_loader = DataLoader(train_ds, batch_size=48, shuffle=True)
-val_loader = DataLoader(val_ds, batch_size=48)
+train_loader = DataLoader(
+    train_ds,
+    batch_size=16,
+    shuffle=True,
+    num_workers=2,
+    pin_memory=True
+)
+
+val_loader = DataLoader(
+    val_ds,
+    batch_size=16,
+    num_workers=2,
+    pin_memory=True
+)
 
 # ===== MODEL =====
 model = EmbeddingModel(len(train_ds.classes)).to(device)
@@ -54,16 +66,18 @@ def contrastive_loss(a, p, n):
 
 # ===== OPTIM =====
 opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=80)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=50)
 
-# ===== SAVE LIST =====
+# ===== HISTORY =====
 train_acc_list = []
 val_acc_list = []
 train_loss_list = []
 val_loss_list = []
 
 best_val = 0
-EPOCHS = 80
+EPOCHS = 50
+
+print("🔥 START TRAINING...")
 
 # ===== TRAIN LOOP =====
 for epoch in range(EPOCHS):
@@ -87,7 +101,6 @@ for epoch in range(EPOCHS):
         loss_con = contrastive_loss(a_emb, p_emb, n_emb)
         loss_cls = ce(logits, label)
 
-        # 🔥 MULTI-HEAD LOSS (chuẩn paper)
         loss = loss_triplet + loss_con + loss_cls
 
         loss.backward()
@@ -148,28 +161,22 @@ for epoch in range(EPOCHS):
         torch.save(model.state_dict(), "best_model.pth")
         print("🔥 SAVE BEST MODEL")
 
-# ===== SMOOTH FUNCTION =====
+# ===== PLOT =====
 def smooth(y, box=5):
     return np.convolve(y, np.ones(box)/box, mode='same')
 
-# ===== PLOT ACCURACY =====
 plt.figure()
 plt.plot(smooth(train_acc_list), label="Train Acc")
 plt.plot(smooth(val_acc_list), label="Val Acc")
 plt.legend()
 plt.title("Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
 plt.savefig("accuracy.png")
 
-# ===== PLOT LOSS =====
 plt.figure()
 plt.plot(smooth(train_loss_list), label="Train Loss")
 plt.plot(smooth(val_loss_list), label="Val Loss")
 plt.legend()
 plt.title("Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
 plt.savefig("loss.png")
 
 print("\n✅ DONE TRAIN + SAVED CHART")
