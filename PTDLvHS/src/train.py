@@ -3,261 +3,137 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from model import EmbeddingModel
 from dataset import TripletDataset
 
-# =====================
-# DEVICE
-# =====================
+# ===== SMOOTH =====
+def smooth_curve(values, factor=0.9):
+    smoothed = []
+    for v in values:
+        if smoothed:
+            smoothed.append(smoothed[-1]*factor + v*(1-factor))
+        else:
+            smoothed.append(v)
+    return smoothed
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", device)
 
-if torch.cuda.is_available():
-    print("GPU:", torch.cuda.get_device_name(0))
-
-# =====================
-# PATH
-# =====================
 BASE_DIR = "/content/doanck/PTDLvHS/data"
-
-# dùng dataset nhỏ để chart đẹp
 train_dir = os.path.join(BASE_DIR, "train")
 val_dir = os.path.join(BASE_DIR, "val")
 
-print("Train exists:", os.path.exists(train_dir))
-print("Val exists:", os.path.exists(val_dir))
-
-# =====================
-# TRANSFORM
-# =====================
-train_transform = transforms.Compose([
-    transforms.Resize((300, 300)),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomRotation(5),
-    transforms.ColorJitter(0.1, 0.1, 0.1),
+train_tf = transforms.Compose([
+    transforms.Resize((300,300)),
+    transforms.RandomHorizontalFlip(),
     transforms.ToTensor()
 ])
 
-val_transform = transforms.Compose([
-    transforms.Resize((300, 300)),
+val_tf = transforms.Compose([
+    transforms.Resize((300,300)),
     transforms.ToTensor()
 ])
 
-# =====================
-# DATASET
-# =====================
-train_dataset = TripletDataset(train_dir, transform=train_transform, length=500)
-val_dataset = TripletDataset(val_dir, transform=val_transform, length=100)
+train_ds = TripletDataset(train_dir, train_tf, length=5000)
+val_ds = TripletDataset(val_dir, val_tf, length=1000)
 
-num_classes = len(train_dataset.classes)
-print("Number of classes:", num_classes)
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+val_loader = DataLoader(val_ds, batch_size=32)
 
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=32,
-    shuffle=True,
-    num_workers=2,
-    pin_memory=True
-)
+model = EmbeddingModel(len(train_ds.classes)).to(device)
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=32,
-    shuffle=False,
-    num_workers=2,
-    pin_memory=True
-)
+triplet = nn.TripletMarginLoss(margin=1.0)
+ce = nn.CrossEntropyLoss()
 
-# =====================
-# MODEL
-# =====================
-model = EmbeddingModel(num_classes=num_classes).to(device)
-
-# =====================
-# LOSS
-# =====================
-criterion_triplet = nn.TripletMarginLoss(margin=0.5)
-criterion_cls = nn.CrossEntropyLoss(label_smoothing=0.1)
-
-# =====================
-# OPTIMIZER
-# =====================
-optimizer = torch.optim.AdamW(
+opt = torch.optim.AdamW(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=3e-5,
-    weight_decay=1e-4
+    lr=1e-4
 )
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer,
-    mode="max",
-    factor=0.5,
-    patience=3
-)
+train_losses, val_losses = [], []
+train_accs, val_accs = [], []
 
-scaler = torch.amp.GradScaler("cuda")
-
-# =====================
-# TRAIN CONFIG
-# =====================
-num_epochs = 40
-best_val_acc = 0
-patience = 5
-counter = 0
-
-train_losses = []
-val_losses = []
-train_accs = []
-val_accs = []
-
-# =====================
-# TRAIN LOOP
-# =====================
-for epoch in range(num_epochs):
-    print(f"\nEpoch {epoch + 1}/{num_epochs}")
+for epoch in range(40):
+    print(f"\nEpoch {epoch+1}")
 
     model.train()
-    running_loss = 0
+    total_loss = 0
     correct = 0
     total = 0
 
-    for anchor, positive, negative, label in tqdm(train_loader):
-        anchor = anchor.to(device, non_blocking=True)
-        positive = positive.to(device, non_blocking=True)
-        negative = negative.to(device, non_blocking=True)
-        label = label.to(device, non_blocking=True)
+    for a,p,n,label in tqdm(train_loader):
+        a,p,n,label = a.to(device),p.to(device),n.to(device),label.to(device)
 
-        optimizer.zero_grad()
+        opt.zero_grad()
 
-        with torch.amp.autocast("cuda"):
-            a_emb, a_logits = model(anchor)
-            p_emb, _ = model(positive)
-            n_emb, _ = model(negative)
+        a_emb,a_log = model(a, label)
+        p_emb = model(p)
+        n_emb = model(n)
 
-            loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
-            loss_cls = criterion_cls(a_logits, label)
+        loss_triplet = triplet(a_emb,p_emb,n_emb)
+        loss_cls = ce(a_log,label)
 
-            loss = loss_triplet + 0.5 * loss_cls
+        loss = loss_triplet + 0.1*loss_cls
 
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        opt.step()
 
-        running_loss += loss.item()
+        total_loss += loss.item()
 
-        # dùng classification accuracy cho chart đẹp
-        _, preds = torch.max(a_logits, 1)
+        # ===== ACC =====
+        _, preds = torch.max(a_log, 1)
         correct += (preds == label).sum().item()
-        total += anchor.size(0)
+        total += label.size(0)
 
-    train_loss = running_loss / len(train_loader)
-    train_acc = correct / total
+    train_loss = total_loss/len(train_loader)
+    train_acc = correct/total
 
-    # =====================
-    # VALIDATION
-    # =====================
+    # ===== VALID =====
     model.eval()
-    val_running_loss = 0
-    val_correct = 0
-    val_total = 0
+    v_loss = 0
+    v_correct = 0
+    v_total = 0
 
     with torch.no_grad():
-        for anchor, positive, negative, label in tqdm(val_loader):
-            anchor = anchor.to(device, non_blocking=True)
-            positive = positive.to(device, non_blocking=True)
-            negative = negative.to(device, non_blocking=True)
-            label = label.to(device, non_blocking=True)
+        for a,p,n,label in val_loader:
+            a,p,n,label = a.to(device),p.to(device),n.to(device),label.to(device)
 
-            a_emb, a_logits = model(anchor)
-            p_emb, _ = model(positive)
-            n_emb, _ = model(negative)
+            a_emb,a_log = model(a, label)
+            p_emb = model(p)
+            n_emb = model(n)
 
-            loss_triplet = criterion_triplet(a_emb, p_emb, n_emb)
-            loss_cls = criterion_cls(a_logits, label)
+            loss = triplet(a_emb,p_emb,n_emb) + 0.1*ce(a_log,label)
+            v_loss += loss.item()
 
-            loss = loss_triplet + 0.5 * loss_cls
-            val_running_loss += loss.item()
+            _, preds = torch.max(a_log, 1)
+            v_correct += (preds == label).sum().item()
+            v_total += label.size(0)
 
-            _, preds = torch.max(a_logits, 1)
-            val_correct += (preds == label).sum().item()
-            val_total += anchor.size(0)
-
-    val_loss = val_running_loss / len(val_loader)
-    val_acc = val_correct / val_total
-
-    scheduler.step(val_acc)
+    val_loss = v_loss/len(val_loader)
+    val_acc = v_correct/v_total
 
     train_losses.append(train_loss)
     val_losses.append(val_loss)
     train_accs.append(train_acc)
     val_accs.append(val_acc)
 
-    print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
-    print(f"Train Acc : {train_acc:.4f} | Val Acc : {val_acc:.4f}")
+    print(f"Loss: {train_loss:.4f} | {val_loss:.4f}")
+    print(f"Acc : {train_acc:.4f} | {val_acc:.4f}")
 
-    # =====================
-    # SAVE BEST MODEL
-    # =====================
-    if val_acc > best_val_acc:
-        best_val_acc = val_acc
-        torch.save(model.state_dict(), "best_model.pth")
-        print("Saved best model!")
-        counter = 0
-    else:
-        counter += 1
-        print(f"No improvement: {counter}/{patience}")
+    torch.save(model.state_dict(),"best_model.pth")
 
-    if counter >= patience:
-        print("Early stopping")
-        break
-
-
-# =====================
-# SMOOTH CURVE
-# =====================
-def smooth_curve(values, factor=0.95):
-    smoothed = []
-    for v in values:
-        if smoothed:
-            smoothed.append(smoothed[-1] * factor + v * (1 - factor))
-        else:
-            smoothed.append(v)
-    return smoothed
-
-
-# =====================
-# SAVE LOSS CURVE
-# =====================
-plt.style.use("seaborn-v0_8")
-
-plt.figure(figsize=(10, 6))
-plt.plot(smooth_curve(train_losses), label="Train", linewidth=2)
-plt.plot(smooth_curve(val_losses), label="Test", linewidth=2)
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Model Loss")
+# ===== PLOT =====
+plt.plot(smooth_curve(train_losses), label="Train Loss")
+plt.plot(smooth_curve(val_losses), label="Val Loss")
 plt.legend()
-plt.grid(True)
-plt.tight_layout()
 plt.savefig("loss_curve.png")
-plt.close()
 
-# =====================
-# SAVE ACCURACY CURVE
-# =====================
-plt.figure(figsize=(10, 6))
-plt.plot(smooth_curve(train_accs), label="Train", linewidth=2)
-plt.plot(smooth_curve(val_accs), label="Test", linewidth=2)
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.title("Model Accuracy")
+plt.figure()
+plt.plot(train_accs, label="Train Acc")
+plt.plot(val_accs, label="Val Acc")
 plt.legend()
-plt.grid(True)
-plt.tight_layout()
 plt.savefig("accuracy_curve.png")
-plt.close()
 
-print("Saved charts successfully!")
+print("DONE TRAIN")

@@ -25,6 +25,9 @@
                 {% for item in res %}
                     <div class="result-box">
 
+                        <!-- 🔥 HIỂN THỊ ẢNH -->
+                        <img src="{{ item.image_path }}" width="80">
+
                         <b>{{ item.pill_code }}</b>
                         <p>{{ item.full_label }}</p>
 
@@ -44,13 +47,11 @@
     {% endif %}
 </div>
 
-<!-- JS FIX WIDTH -->
 <script>
     document.querySelectorAll('.fill').forEach(el => {
         let score = parseFloat(el.getAttribute('data-score'));
 
         if (isNaN(score)) score = 0;
-
         score = Math.max(0, Math.min(score, 100));
 
         el.style.width = score + "%";
