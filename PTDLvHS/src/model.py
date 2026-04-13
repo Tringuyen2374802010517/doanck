@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import timm
 
+# ===== ArcFace =====
 class ArcFace(nn.Module):
     def __init__(self, in_features, out_features, s=30.0, m=0.5):
         super().__init__()
@@ -23,17 +24,24 @@ class ArcFace(nn.Module):
         return output * self.s
 
 
+# ===== Model =====
 class EmbeddingModel(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
 
-        self.backbone = timm.create_model("efficientnet_b3", pretrained=True, num_classes=0)
+        self.backbone = timm.create_model(
+            "efficientnet_b3",
+            pretrained=True,
+            num_classes=0
+        )
+
         in_features = self.backbone.num_features
 
-        for name, param in self.backbone.named_parameters():
-            if "blocks.4" not in name and "blocks.5" not in name and "blocks.6" not in name:
-                param.requires_grad = False
+        # 🔥 FREEZE BACKBONE (GIẢM OVERFIT)
+        for param in self.backbone.parameters():
+            param.requires_grad = False
 
+        # ===== Embedding head =====
         self.embedding = nn.Sequential(
             nn.Linear(in_features, 512),
             nn.BatchNorm1d(512),
@@ -42,10 +50,12 @@ class EmbeddingModel(nn.Module):
             nn.Linear(512, 128)
         )
 
+        # ===== ArcFace =====
         self.arcface = ArcFace(128, num_classes)
 
     def forward(self, x, labels=None):
         feat = self.backbone(x)
+
         emb = self.embedding(feat)
         emb = F.normalize(emb, p=2, dim=1)
 
