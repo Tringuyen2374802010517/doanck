@@ -18,28 +18,31 @@ BASE_DIR = "/content/doanck/PTDLvHS/data"
 train_dir = os.path.join(BASE_DIR, "train")
 val_dir = os.path.join(BASE_DIR, "val")
 
-# ===== TRANSFORM =====
+# ===== TRANSFORM (CHUẨN 300) =====
 train_tf = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(20),
-    transforms.RandomAffine(0, translate=(0.1,0.1)),
+    transforms.Resize((300,300)),
+    transforms.RandomHorizontalFlip(0.5),
+    transforms.RandomRotation(10),
     transforms.ColorJitter(0.2,0.2,0.2),
     transforms.ToTensor()
 ])
 
 val_tf = transforms.Compose([
-    transforms.Resize((224,224)),
+    transforms.Resize((300,300)),
     transforms.ToTensor()
 ])
 
-# ===== DATA (GIẢM LOAD) =====
-train_ds = TripletDataset(train_dir, train_tf, length=2000)
-val_ds = TripletDataset(val_dir, val_tf, length=500)
+# ===== DATASET (TĂNG DATA ẢO) =====
+train_ds = TripletDataset(train_dir, train_tf, length=5000)
+val_ds = TripletDataset(val_dir, val_tf, length=1000)
 
+print("Train classes:", len(train_ds.classes))
+print("Val classes:", len(val_ds.classes))
+
+# ===== DATALOADER =====
 train_loader = DataLoader(
     train_ds,
-    batch_size=16,
+    batch_size=32,
     shuffle=True,
     num_workers=2,
     pin_memory=True
@@ -47,7 +50,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_ds,
-    batch_size=16,
+    batch_size=32,
     num_workers=2,
     pin_memory=True
 )
@@ -59,14 +62,12 @@ model = EmbeddingModel(len(train_ds.classes)).to(device)
 triplet = nn.TripletMarginLoss(margin=1.0)
 ce = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-def contrastive_loss(a, p, n):
-    pos = torch.norm(a - p, dim=1)
-    neg = torch.norm(a - n, dim=1)
-    return torch.mean(pos) + torch.mean(torch.relu(1.0 - neg))
-
 # ===== OPTIM =====
-opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=50)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+
+# ===== TRAIN CONFIG =====
+EPOCHS = 80
+best_val = 0
 
 # ===== HISTORY =====
 train_acc_list = []
@@ -74,15 +75,13 @@ val_acc_list = []
 train_loss_list = []
 val_loss_list = []
 
-best_val = 0
-EPOCHS = 50
-
 print("🔥 START TRAINING...")
 
 # ===== TRAIN LOOP =====
 for epoch in range(EPOCHS):
     print(f"\n===== EPOCH {epoch+1}/{EPOCHS} =====")
 
+    # ===== TRAIN =====
     model.train()
     total_loss = 0
     correct = 0
@@ -91,20 +90,20 @@ for epoch in range(EPOCHS):
     for a,p,n,label in tqdm(train_loader):
         a,p,n,label = a.to(device),p.to(device),n.to(device),label.to(device)
 
-        opt.zero_grad()
+        optimizer.zero_grad()
 
         a_emb, logits = model(a, label)
         p_emb = model(p)
         n_emb = model(n)
 
+        # 🔥 LOSS CHUẨN
         loss_triplet = triplet(a_emb, p_emb, n_emb)
-        loss_con = contrastive_loss(a_emb, p_emb, n_emb)
         loss_cls = ce(logits, label)
 
-        loss = loss_triplet + loss_con + loss_cls
+        loss = loss_cls + 0.5 * loss_triplet
 
         loss.backward()
-        opt.step()
+        optimizer.step()
 
         total_loss += loss.item()
 
@@ -130,9 +129,8 @@ for epoch in range(EPOCHS):
             n_emb = model(n)
 
             loss = (
-                triplet(a_emb,p_emb,n_emb)
-                + contrastive_loss(a_emb,p_emb,n_emb)
-                + ce(logits,label)
+                ce(logits, label)
+                + 0.5 * triplet(a_emb, p_emb, n_emb)
             )
 
             v_loss += loss.item()
@@ -152,8 +150,6 @@ for epoch in range(EPOCHS):
     val_acc_list.append(val_acc)
     train_loss_list.append(train_loss)
     val_loss_list.append(val_loss)
-
-    scheduler.step()
 
     # ===== SAVE BEST =====
     if val_acc > best_val:
