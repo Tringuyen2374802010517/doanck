@@ -18,7 +18,7 @@ BASE_DIR = "/content/doanck/PTDLvHS/data"
 train_dir = os.path.join(BASE_DIR, "train")
 val_dir = os.path.join(BASE_DIR, "val")
 
-# ===== TRANSFORM (ỔN ĐỊNH HƠN) =====
+# ===== TRANSFORM =====
 train_tf = transforms.Compose([
     transforms.Resize((300,300)),
     transforms.RandomHorizontalFlip(0.5),
@@ -33,8 +33,10 @@ val_tf = transforms.Compose([
 ])
 
 # ===== DATASET =====
-train_ds = TripletDataset(train_dir, train_tf, length=8000)
-val_ds = TripletDataset(val_dir, val_tf, length=1000)
+train_ds = TripletDataset(train_dir, train_tf, length=8000, train=True)
+
+# 🔥 VAL FIX: deterministic + ít noise
+val_ds = TripletDataset(val_dir, val_tf, length=300, train=False)
 
 print("Train classes:", len(train_ds.classes))
 print("Val classes:", len(val_ds.classes))
@@ -50,13 +52,13 @@ model = EmbeddingModel(len(train_ds.classes)).to(device)
 triplet = nn.TripletMarginLoss(margin=1.0)
 ce = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-# ===== OPTIM (GIẢM LR) =====
+# ===== OPTIM =====
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
-# ===== SCHEDULER (MƯỢT CURVE) =====
+# ===== SCHEDULER =====
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=40)
 
-# ===== TRAIN CONFIG =====
+# ===== CONFIG =====
 EPOCHS = 40
 best_val = 0
 
@@ -132,22 +134,20 @@ for epoch in range(EPOCHS):
     print(f"Train Loss: {train_loss:.4f} | Acc: {train_acc:.4f}")
     print(f"Val   Loss: {val_loss:.4f} | Acc: {val_acc:.4f}")
 
-    # ===== SAVE HISTORY =====
+    # ===== SAVE =====
     train_acc_list.append(train_acc)
     val_acc_list.append(val_acc)
     train_loss_list.append(train_loss)
     val_loss_list.append(val_loss)
 
-    # ===== SAVE BEST =====
     if val_acc > best_val:
         best_val = val_acc
         torch.save(model.state_dict(), "best_model.pth")
         print("🔥 SAVE BEST MODEL")
 
-    # ===== STEP LR =====
     scheduler.step()
 
-# ===== SMOOTH FUNCTION =====
+# ===== SMOOTH =====
 def smooth(y, box=5):
     return np.convolve(y, np.ones(box)/box, mode='same')
 

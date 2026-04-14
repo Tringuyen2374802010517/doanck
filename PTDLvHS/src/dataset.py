@@ -4,10 +4,11 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 class TripletDataset(Dataset):
-    def __init__(self, root, transform=None, length=2000):
+    def __init__(self, root, transform=None, length=2000, train=True):
         self.root = root
         self.transform = transform
         self.length = length
+        self.train = train
 
         self.classes = sorted(os.listdir(root))
         self.class_to_images = {}
@@ -23,7 +24,7 @@ class TripletDataset(Dataset):
         self.classes = list(self.class_to_images.keys())
         print("Total valid classes:", len(self.classes))
 
-        # 🔥 CACHE ẢNH (QUAN TRỌNG)
+        # cache ảnh
         self.cache = {}
 
     def __len__(self):
@@ -40,19 +41,29 @@ class TripletDataset(Dataset):
 
     def __getitem__(self, idx):
         while True:
-            # ===== Anchor class =====
-            c = random.choice(self.classes)
+            # ===== CHỌN CLASS =====
+            if self.train:
+                c = random.choice(self.classes)
+            else:
+                # 🔥 FIX: VAL KHÔNG RANDOM
+                c = self.classes[idx % len(self.classes)]
+
             imgs = self.class_to_images[c]
 
             if len(imgs) < 2:
                 continue
 
+            # ===== POSITIVE =====
             a_name, p_name = random.sample(imgs, 2)
 
-            # ===== Negative =====
-            neg_c = random.choice(self.classes)
-            while neg_c == c:
+            # ===== NEGATIVE =====
+            if self.train:
                 neg_c = random.choice(self.classes)
+                while neg_c == c:
+                    neg_c = random.choice(self.classes)
+            else:
+                # 🔥 FIX: VAL ổn định hơn
+                neg_c = self.classes[(idx + 1) % len(self.classes)]
 
             n_name = random.choice(self.class_to_images[neg_c])
 
