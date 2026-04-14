@@ -18,12 +18,12 @@ BASE_DIR = "/content/doanck/PTDLvHS/data"
 train_dir = os.path.join(BASE_DIR, "train")
 val_dir = os.path.join(BASE_DIR, "val")
 
-# ===== TRANSFORM (CHUẨN 300) =====
+# ===== TRANSFORM (ỔN ĐỊNH HƠN) =====
 train_tf = transforms.Compose([
     transforms.Resize((300,300)),
     transforms.RandomHorizontalFlip(0.5),
     transforms.RandomRotation(10),
-    transforms.ColorJitter(0.2,0.2,0.2),
+    transforms.ColorJitter(0.1,0.1,0.1),
     transforms.ToTensor()
 ])
 
@@ -32,28 +32,16 @@ val_tf = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# ===== DATASET (TĂNG DATA ẢO) =====
-train_ds = TripletDataset(train_dir, train_tf, length=5000)
+# ===== DATASET =====
+train_ds = TripletDataset(train_dir, train_tf, length=8000)
 val_ds = TripletDataset(val_dir, val_tf, length=1000)
 
 print("Train classes:", len(train_ds.classes))
 print("Val classes:", len(val_ds.classes))
 
 # ===== DATALOADER =====
-train_loader = DataLoader(
-    train_ds,
-    batch_size=32,
-    shuffle=True,
-    num_workers=2,
-    pin_memory=True
-)
-
-val_loader = DataLoader(
-    val_ds,
-    batch_size=32,
-    num_workers=2,
-    pin_memory=True
-)
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True, num_workers=2)
+val_loader = DataLoader(val_ds, batch_size=32, num_workers=2)
 
 # ===== MODEL =====
 model = EmbeddingModel(len(train_ds.classes)).to(device)
@@ -62,11 +50,14 @@ model = EmbeddingModel(len(train_ds.classes)).to(device)
 triplet = nn.TripletMarginLoss(margin=1.0)
 ce = nn.CrossEntropyLoss(label_smoothing=0.1)
 
-# ===== OPTIM =====
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+# ===== OPTIM (GIẢM LR) =====
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+# ===== SCHEDULER (MƯỢT CURVE) =====
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=40)
 
 # ===== TRAIN CONFIG =====
-EPOCHS = 80
+EPOCHS = 40
 best_val = 0
 
 # ===== HISTORY =====
@@ -96,7 +87,6 @@ for epoch in range(EPOCHS):
         p_emb = model(p)
         n_emb = model(n)
 
-        # 🔥 LOSS CHUẨN
         loss_triplet = triplet(a_emb, p_emb, n_emb)
         loss_cls = ce(logits, label)
 
@@ -128,10 +118,7 @@ for epoch in range(EPOCHS):
             p_emb = model(p)
             n_emb = model(n)
 
-            loss = (
-                ce(logits, label)
-                + 0.5 * triplet(a_emb, p_emb, n_emb)
-            )
+            loss = ce(logits, label) + 0.5 * triplet(a_emb, p_emb, n_emb)
 
             v_loss += loss.item()
 
@@ -157,10 +144,14 @@ for epoch in range(EPOCHS):
         torch.save(model.state_dict(), "best_model.pth")
         print("🔥 SAVE BEST MODEL")
 
-# ===== PLOT =====
+    # ===== STEP LR =====
+    scheduler.step()
+
+# ===== SMOOTH FUNCTION =====
 def smooth(y, box=5):
     return np.convolve(y, np.ones(box)/box, mode='same')
 
+# ===== PLOT =====
 plt.figure()
 plt.plot(smooth(train_acc_list), label="Train Acc")
 plt.plot(smooth(val_acc_list), label="Val Acc")
@@ -175,4 +166,4 @@ plt.legend()
 plt.title("Loss")
 plt.savefig("loss.png")
 
-print("\n✅ DONE TRAIN + SAVED CHART")
+print("\n✅ DONE TRAIN + CHART SMOOTH")
